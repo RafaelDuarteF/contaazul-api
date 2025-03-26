@@ -71,7 +71,7 @@ class SalesETL:
             )
         }
 
-    def fetch_and_transform_sales(self, access_token: str, page: int = 0, size: int = 300) -> Optional[List[Dict]]:
+    def fetch_and_transform_sales(self, access_token: str, page: int = 0, size: int = 2000) -> Optional[List[Dict]]:
         """Fetch sales from ContaAzul API and transform them."""
         try:
             response = requests.get(
