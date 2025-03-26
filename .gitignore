@@ -28,7 +28,7 @@ venv/
 ENV/
 
 # Data
-/data
+data/
 
 # IDE
 .idea/
