@@ -60,11 +60,7 @@ def read_data(data_type):
         with open(latest_file, 'r', encoding='utf-8') as f:
             data = json.load(f)
             
-        return jsonify({
-            "message": f"Successfully read {data_type} data",
-            "file": str(latest_file),
-            "data": data
-        })
+        return jsonify(data)
 
     except Exception as e:
         return jsonify({

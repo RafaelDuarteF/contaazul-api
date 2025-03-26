@@ -12,7 +12,7 @@ FLASK_SECRET_KEY = os.getenv('FLASK_SECRET_KEY', secrets.token_hex(16))
 # ContaAzul Configuration
 CLIENT_ID = os.getenv("CLIENT_ID")
 CLIENT_SECRET = os.getenv("CLIENT_SECRET")
-REDIRECT_URI = os.getenv("REDIRECT_URI", "https://yourusername.pythonanywhere.com/callback")
+REDIRECT_URI = os.getenv("REDIRECT_URI")
 AUTH_URL = "https://api.contaazul.com/auth/authorize"
 TOKEN_URL = "https://api.contaazul.com/oauth2/token"
 
