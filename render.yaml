@@ -1,0 +1,27 @@
+services:
+  - type: web
+    name: contaazul-integration
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn -c gunicorn.conf.py index:app
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.13.2
+      - key: FLASK_SECRET_KEY
+        generateValue: true
+      - key: DATA_OUTPUT_PATH
+        value: /data/private
+      - key: CLIENT_ID
+        sync: false
+      - key: CLIENT_SECRET
+        sync: false
+      - key: REDIRECT_URI
+        sync: false
+      - key: API_USERNAME
+        sync: false
+      - key: API_PASSWORD
+        sync: false
+    disk:
+      name: data
+      mountPath: /data
+      sizeGB: 1
