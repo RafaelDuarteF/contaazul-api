@@ -27,8 +27,9 @@ var/
 venv/
 ENV/
 
-# Data
-data/private
+# Esconder a pasta data e a pasta private
+data/
+
 
 # IDE
 .idea/
