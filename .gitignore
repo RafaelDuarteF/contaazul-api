@@ -27,10 +27,6 @@ var/
 venv/
 ENV/
 
-# Data directory
-data/private/
-*.json
-
 # IDE
 .idea/
 .vscode/
