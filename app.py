@@ -47,7 +47,7 @@ def read_data(data_type):
     """Read JSON data files with basic authentication."""
     try:
         # List all files of the specified type
-        files = list(DATA_PATH.glob(f"{data_type}_data_*.json"))
+        files = list(DATA_PATH.glob(f"{data_type}_data.json"))
         
         if not files:
             return jsonify({
