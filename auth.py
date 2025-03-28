@@ -36,8 +36,8 @@ def callback():
     state = request.args.get("state")
     auth_code = request.args.get("code")
 
-    if not state or not state_store.get(state):
-        return "Error: Invalid state - possible CSRF attack.", 401
+    if not state:
+        return jsonify({"error": "Invalid state"}), 401
 
     try:
         response = requests.post(
