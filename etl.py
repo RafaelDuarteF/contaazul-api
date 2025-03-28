@@ -37,7 +37,7 @@ class SalesETL:
         if not folder:
             return None
         
-        token_file = Path(folder) / 'access_token.json'
+        token_file = Path(self.data_path) / folder / 'access_token.json'
         if not token_file.exists():
             return None
         
