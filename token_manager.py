@@ -1,20 +1,52 @@
 import base64
 import json
 from datetime import datetime, timedelta
-
+from pathlib import Path
 import requests
 from flask import Blueprint, jsonify
 
 from config import (
-    CLIENT_ID, CLIENT_SECRET, TOKEN_FILE,
-    TOKEN_URL
+    CLIENT_ID, CLIENT_SECRET, REDIRECT_URI,
+    TOKEN_FILE, TOKEN_URL
 )
 
 token_bp = Blueprint('token', __name__)
 
 class TokenManager:
-    def __init__(self):
-        self.token_file = TOKEN_FILE
+    def __init__(self, customer_id):
+        self.customer_id = customer_id
+
+    def _get_customer_folder(self):
+        with open('customers.json', 'r') as f:
+            customers = json.load(f)
+        for user in customers['users']:
+            if user['id'] == self.customer_id:
+                return user['folder']
+        return None
+
+    def _get_token_file_path(self):
+        folder = self._get_customer_folder()
+        return Path(folder) / 'access_token.json'
+
+    def _read_token_file(self):
+        token_file = self._get_token_file_path()
+        if not token_file.exists():
+            return None
+        
+        with open(token_file, 'r', encoding='utf-8') as f:
+            return json.load(f)
+
+    def _write_token_file(self, token_info):
+        folder = self._get_customer_folder()
+        if not folder:
+            return False
+        
+        token_file = self._get_token_file_path()
+        token_file.parent.mkdir(parents=True, exist_ok=True)
+        
+        with open(token_file, 'w', encoding='utf-8') as f:
+            json.dump(token_info, f, ensure_ascii=False, indent=2)
+        return True
 
     def _get_basic_auth(self):
         """Get Basic Auth header for token requests."""
@@ -22,73 +54,49 @@ class TokenManager:
         encoded = base64.b64encode(credentials.encode('utf-8')).decode('utf-8')
         return f"Basic {encoded}"
 
-    def _read_token_file(self):
-        """Read the current token information."""
-        try:
-            with open(self.token_file, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except Exception as e:
-            print(f"Error reading token file: {e}")
-            return None
-
-    def _save_token_info(self, token_info):
-        """Save updated token information."""
-        token_info["created_at"] = datetime.now().isoformat()
-        with open(self.token_file, 'w', encoding='utf-8') as f:
-            json.dump(token_info, f, ensure_ascii=False, indent=2)
-
-    def refresh_token(self):
-        """Refresh the access token using the refresh token."""
-        current_token = self._read_token_file()
-        if not current_token or "refresh_token" not in current_token:
-            return None, "No refresh token found"
-
-        headers = {
-            "Authorization": self._get_basic_auth(),
-            "Content-Type": "application/x-www-form-urlencoded"
-        }
-
-        data = {
-            "grant_type": "refresh_token",
-            "refresh_token": current_token["refresh_token"]
-        }
-
-        try:
-            response = requests.post(TOKEN_URL, headers=headers, data=data)
-            response.raise_for_status()
-            
-            new_token_data = response.json()
-            token_info = {
-                "access_token": new_token_data["access_token"],
-                "token_type": new_token_data.get("token_type", "Bearer"),
-                "expires_in": new_token_data.get("expires_in"),
-                "refresh_token": new_token_data.get("refresh_token", current_token["refresh_token"]),
-                "scope": new_token_data.get("scope")
-            }
-            
-            self._save_token_info(token_info)
-            return token_info, None
-
-        except requests.exceptions.RequestException as e:
-            return None, f"Error refreshing token: {str(e)}"
-
     def is_token_expired(self):
-        """Check if the current token is expired or about to expire."""
         token_info = self._read_token_file()
-        if not token_info or "created_at" not in token_info:
+        if not token_info:
             return True
-
-        created_at = datetime.fromisoformat(token_info["created_at"])
-        expires_in = token_info.get("expires_in", 3600)  # Default 1 hour
-        expiry_time = created_at + timedelta(seconds=expires_in)
         
-        # Consider token as expired if it's within 5 minutes of expiration
+        expiry_time = datetime.fromisoformat(token_info['expires_at'])
         return datetime.now() > (expiry_time - timedelta(minutes=5))
 
-@token_bp.route('/refresh_token')
-def refresh_token_endpoint():
+    def refresh_token(self):
+        token_info = self._read_token_file()
+        if not token_info:
+            return None, "No token found"
+        
+        try:
+            response = requests.post(
+                TOKEN_URL,
+                headers={
+                    "Authorization": self._get_basic_auth(),
+                    "Content-Type": "application/x-www-form-urlencoded"
+                },
+                data={
+                    "grant_type": "refresh_token",
+                    "refresh_token": token_info['refresh_token']
+                }
+            )
+            response.raise_for_status()
+            
+            new_token_info = response.json()
+            new_token_info['expires_at'] = (
+                datetime.now() + timedelta(seconds=new_token_info['expires_in'])
+            ).isoformat()
+            
+            if not self._write_token_file(new_token_info):
+                return None, "Failed to save token"
+            
+            return new_token_info, None
+        except requests.exceptions.RequestException as e:
+            return None, str(e)
+
+@token_bp.route('/refresh_token/<customer_id>')
+def refresh_token_endpoint(customer_id):
     """Endpoint to refresh the access token."""
-    manager = TokenManager()
+    manager = TokenManager(customer_id)
     
     if not manager.is_token_expired():
         return jsonify({

@@ -1,5 +1,6 @@
 import json
 from datetime import datetime
+from pathlib import Path
 from typing import Dict, List, Optional
 
 import requests
@@ -11,10 +12,19 @@ from config import DATA_PATH, TOKEN_FILE
 etl_bp = Blueprint('etl', __name__)
 
 class SalesETL:
-    def __init__(self):
+    def __init__(self, customer_id):
+        self.customer_id = customer_id
         self.base_url = "https://api.contaazul.com/v1"
         self.data_path = DATA_PATH
         self.token_file = TOKEN_FILE
+
+    def _get_customer_folder(self):
+        with open('customers.json', 'r') as f:
+            customers = json.load(f)
+        for user in customers['users']:
+            if user['id'] == self.customer_id:
+                return user['folder']
+        return None
 
     def _get_headers(self, access_token: str) -> Dict[str, str]:
         return {
@@ -23,20 +33,19 @@ class SalesETL:
         }
 
     def _get_token(self) -> Optional[str]:
-        """Get access token from private JSON file."""
-        try:
-            if not self.token_file.exists():
-                return None
-                
-            with open(self.token_file, 'r', encoding='utf-8') as f:
-                token_data = json.load(f)
-                return token_data.get("access_token")
-        except Exception as e:
-            print(f"Error reading token file: {e}")
+        folder = self._get_customer_folder()
+        if not folder:
             return None
+        
+        token_file = Path(folder) / 'access_token.json'
+        if not token_file.exists():
+            return None
+        
+        with open(token_file, 'r', encoding='utf-8') as f:
+            token_data = json.load(f)
+            return token_data.get("access_token")
 
     def flatten_sale(self, sale: Dict) -> Dict:
-        """Transform nested sale object into flattened structure."""
         return {
             "id": sale.get("id"),
             "conta_azul_id": sale.get("contaAzulId"),
@@ -72,7 +81,6 @@ class SalesETL:
         }
 
     def fetch_and_transform_sales(self, access_token: str, page: int = 0, size: int = 2000) -> Optional[List[Dict]]:
-        """Fetch sales from ContaAzul API and transform them."""
         try:
             response = requests.get(
                 f"{self.base_url}/sales",
@@ -82,28 +90,29 @@ class SalesETL:
             response.raise_for_status()
             
             sales = response.json()
-            if not sales:  # Empty page
+            if not sales:
                 return None
-                
-            return [self.flatten_sale(sale) for sale in sales]
             
+            return [self.flatten_sale(sale) for sale in sales]
         except requests.exceptions.RequestException as e:
             print(f"Error fetching sales: {e}")
             return None
 
     def save_sales(self, sales: List[Dict]):
-        """Save transformed sales data to JSON file. If file already exists, it will be overwritten."""
-        filename = self.data_path / f"sales_data.json"
-
+        folder = self._get_customer_folder()
+        if not folder:
+            return None
+        
+        filename = Path(folder) / "sales_data.json"
         with open(filename, 'w', encoding='utf-8') as f:
             json.dump(sales, f, ensure_ascii=False, indent=2)
         
         return filename
 
-@etl_bp.route('/extract_sales')
-def extract_sales():
+@etl_bp.route('/extract_sales/<customer_id>')
+def extract_sales(customer_id):
     """Sales data extraction endpoint."""
-    etl = SalesETL()
+    etl = SalesETL(customer_id)
     access_token = etl._get_token()
     
     if not access_token:

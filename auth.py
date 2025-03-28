@@ -1,77 +1,86 @@
 import base64
 import json
-from datetime import datetime
-
+from datetime import datetime, timedelta
+from flask import jsonify
+from functools import wraps
+from pathlib import Path
+import os
 import requests
 from flask import Blueprint, request
 import secrets
 
 from config import (
-    CLIENT_ID, CLIENT_SECRET, REDIRECT_URI,
-    AUTH_URL, TOKEN_URL, TOKEN_FILE
+    CLIENT_ID, CLIENT_SECRET, REDIRECT_URI, DATA_PATH,
+    AUTH_URL, TOKEN_URL, API_USERNAME, API_PASSWORD
 )
 
 auth_bp = Blueprint('auth', __name__)
 state_store = {}
 
-@auth_bp.route("/")
+@auth_bp.route("/oauth")
 def home():
-    """OAuth authorization initiation endpoint."""
     state = secrets.token_urlsafe(16)
     state_store[state] = True
     
     auth_url = (
-        f"{AUTH_URL}?client_id={CLIENT_ID}&redirect_uri={REDIRECT_URI}"
-        f"&scope=sales&state={state}"
+        f"{AUTH_URL}?response_type=code"
+        f"&client_id={CLIENT_ID}"
+        f"&redirect_uri={REDIRECT_URI}"
+        f"&state={state}"
     )
+    
     return f'<h1>ContaAzul Integration</h1><p><a href="{auth_url}">Click here to authorize</a></p>'
 
 @auth_bp.route("/callback")
 def callback():
-    """OAuth callback endpoint."""
-    auth_code = request.args.get("code")
     state = request.args.get("state")
+    auth_code = request.args.get("code")
 
-    if not state or state not in state_store:
+    if not state or not state_store.get(state):
         return "Error: Invalid state - possible CSRF attack.", 401
-    
-    del state_store[state]
-
-    if not auth_code:
-        return "Error: Authorization code not found.", 400
-
-    credentials = f"{CLIENT_ID}:{CLIENT_SECRET}"
-    encoded_credentials = base64.b64encode(credentials.encode('utf-8')).decode('utf-8')
-    
-    headers = {
-        'Authorization': f'Basic {encoded_credentials}',
-        'Content-Type': 'application/x-www-form-urlencoded'
-    }
-
-    data = {
-        'grant_type': 'authorization_code',
-        'code': auth_code,
-        'redirect_uri': REDIRECT_URI
-    }
 
     try:
-        response = requests.post(TOKEN_URL, headers=headers, data=data)
+        response = requests.post(
+            TOKEN_URL,
+            headers={
+                "Authorization": f"Basic {base64.b64encode(f'{CLIENT_ID}:{CLIENT_SECRET}'.encode()).decode()}",
+                "Content-Type": "application/x-www-form-urlencoded"
+            },
+            data={
+                "grant_type": "authorization_code",
+                "code": auth_code,
+                "redirect_uri": REDIRECT_URI
+            }
+        )
         response.raise_for_status()
-        token_data = response.json()
 
-        token_info = {
-            "access_token": token_data["access_token"],
-            "token_type": token_data.get("token_type", "Bearer"),
-            "expires_in": token_data.get("expires_in"),
-            "refresh_token": token_data.get("refresh_token"),
-            "scope": token_data.get("scope"),
-            "created_at": datetime.now().isoformat()
-        }
+        token_info = response.json()
+        token_info['expires_at'] = (
+            datetime.now() + timedelta(seconds=token_info['expires_in'])
+        ).isoformat()
 
-        with open(TOKEN_FILE, 'w', encoding='utf-8') as f:
-            json.dump(token_info, f, ensure_ascii=False, indent=2)
-
-        return "Token obtained and saved successfully! You can close this window."
-
+        return jsonify(token_info)
     except requests.exceptions.RequestException as e:
         return f"Error obtaining token: {str(e)}", 500
+
+
+def require_auth(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        auth = request.authorization
+        if not auth or not check_auth(auth.username, auth.password):
+            return authenticate()
+        return f(*args, **kwargs)
+    return decorated
+
+def check_auth(username, password):
+    """Check if a username/password combination is valid."""
+    return username == API_USERNAME and password == API_PASSWORD
+
+def authenticate():
+    """Send a 401 response that enables basic auth."""
+    return (
+        jsonify({"error": "Authentication required"}),
+        401,
+        {'WWW-Authenticate': 'Basic realm="Login Required"'}
+    )
