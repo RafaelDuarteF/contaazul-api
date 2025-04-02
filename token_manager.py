@@ -26,7 +26,9 @@ class TokenManager:
 
     def _get_token_file_path(self):
         folder = self._get_customer_folder()
-        return Path(folder) / 'access_token.json'
+        if not folder:
+            return None
+        return Path(DATA_PATH) / folder / 'access_token.json'  # Corrigido aqui
 
     def _read_token_file(self):
         token_file = self._get_token_file_path()
@@ -42,6 +44,9 @@ class TokenManager:
             return False
         
         token_file = self._get_token_file_path()
+        if not token_file:
+            return False
+            
         token_file.parent.mkdir(parents=True, exist_ok=True)
         
         with open(token_file, 'w', encoding='utf-8') as f:
