@@ -103,7 +103,15 @@ class SalesETL:
         if not folder:
             return None
         
-        filename = Path(folder) / "sales_data.json"
+        folder_path = Path(folder)
+        folder_path.mkdir(parents=True, exist_ok=True)  # Garante que o diretório exista
+        
+        filename = folder_path / "sales_data.json"
+        
+        # Se o arquivo não existir, cria um novo
+        if not filename.exists():
+            filename.touch()
+        
         with open(filename, 'w', encoding='utf-8') as f:
             json.dump(sales, f, ensure_ascii=False, indent=2)
         
