@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 import requests
 from flask import Blueprint, jsonify
+from config import DATA_PATH
 
 from config import (
     CLIENT_ID, CLIENT_SECRET, REDIRECT_URI,
