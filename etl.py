@@ -103,7 +103,8 @@ class SalesETL:
         if not folder:
             return None
         
-        folder_path = Path(folder)
+        # Cria o caminho completo incluindo DATA_PATH
+        folder_path = Path(self.data_path) / folder
         folder_path.mkdir(parents=True, exist_ok=True)  # Garante que o diretório exista
         
         filename = folder_path / "sales_data.json"
