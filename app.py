@@ -13,6 +13,7 @@ from etl import etl_bp
 from token_manager import token_bp
 from data import data_bp
 from token_actions import token_actions_bp
+from token_new_manager import token_new_bp
 
 app = Flask(__name__)
 app.secret_key = FLASK_SECRET_KEY
@@ -23,6 +24,7 @@ app.register_blueprint(etl_bp)
 app.register_blueprint(token_bp)
 app.register_blueprint(data_bp)
 app.register_blueprint(token_actions_bp)
+app.register_blueprint(token_new_bp)
 
 if __name__ == "__main__":
     # Only for local development
