@@ -19,6 +19,7 @@ def get_tokens():
     
     for user in customers['users']:
         token_file = Path(DATA_PATH / user['folder'] / 'access_token.json')
+        token_file_new = Path(DATA_PATH / user['folder'] / 'access_token_new.json')
         if token_file.exists():
             with open(token_file, 'r', encoding='utf-8') as f:
                 token_data = json.load(f)
@@ -26,7 +27,19 @@ def get_tokens():
                     'customer_folder': user['folder'],
                     'access_token': token_data.get('access_token'),
                     'expires_at': token_data.get('expires_at'),
-                    'refresh_token': token_data.get('refresh_token')
+                    'refresh_token': token_data.get('refresh_token'),
+                    'type_token': 'old'
+                })
+
+        if token_file_new.exists():
+            with open(token_file_new, 'r', encoding='utf-8') as f:
+                token_data = json.load(f)
+                access_tokens.append({
+                    'customer_folder': user['folder'],
+                    'access_token': token_data.get('access_token'),
+                    'expires_at': token_data.get('expires_at'),
+                    'refresh_token': token_data.get('refresh_token'),
+                    'type_token': 'new'
                 })
     
     return jsonify(access_tokens)
@@ -52,9 +65,13 @@ def insert_tokens():
         access_token = customer.get('access_token')
         expires_at = customer.get('expires_at')
         refresh_token = customer.get('refresh_token')
+        type_token = customer.get('type_token')
 
         customer_folder_path = DATA_PATH / customer_folder
-        token_file = customer_folder_path / 'access_token.json'
+        if type_token == 'new':
+            token_file = customer_folder_path / 'access_token_new.json'
+        else:
+            token_file = customer_folder_path / 'access_token.json'
 
         # Criar a pasta do cliente se não existir
         customer_folder_path.mkdir(parents=True, exist_ok=True)
