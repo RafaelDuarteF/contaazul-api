@@ -182,7 +182,7 @@ class AccountsPayableETL(BaseETL):
 
     def save_accounts_payable(self, accounts: List[Dict]):
         """Save accounts payable data to a JSON file."""
-        return self._save_items(accounts, "accounts_payable.json")
+        return self._save_items(accounts, "accounts_payable_data.json")
 
 
 class AccountsReceivableETL(BaseETL):
@@ -224,7 +224,7 @@ class AccountsReceivableETL(BaseETL):
 
     def save_accounts_receivable(self, accounts: List[Dict]):
         """Save accounts receivable data to a JSON file."""
-        return self._save_items(accounts, "accounts_receivable.json")
+        return self._save_items(accounts, "accounts_receivable_data.json")
 
 
 @etl_bp.route('/contas-a-pagar/<customer_id>', methods=['POST'])

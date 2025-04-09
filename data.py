@@ -13,38 +13,53 @@ data_bp = Blueprint('data', __name__)
 @data_bp.route('/read/<customer_id>/<data_type>')
 @require_auth
 def read_data(customer_id, data_type):
+    """
+    Lê dados de um cliente específico com base no tipo de dado solicitado.
+    
+    Args:
+        customer_id (str/int): ID do cliente
+        data_type (str): Tipo de dado a ser lido (ex: 'orders', 'profile')
+    
+    Returns:
+        Response: JSON com os dados ou mensagem de erro
+    """
     try:
-        # Get customer-specific folder
-        with open('customers.json', 'r') as f:
+        # Passo 1: Localizar o cliente no arquivo customers.json
+        customers_file = Path('customers.json')
+        if not customers_file.exists():
+            return jsonify({"error": "Arquivo customers.json não encontrado"}), 404
+
+        with open(customers_file, 'r', encoding='utf-8') as f:
             customers = json.load(f)
         
+        # Encontrar a pasta do cliente
         customer_folder = None
-        for user in customers['users']:
-            if user['id'] == customer_id:
-                customer_folder = DATA_PATH / user['folder']
+        for user in customers.get('users', []):
+            if str(user.get('id')) == str(customer_id):
+                customer_folder = user.get('folder')
                 break
         
         if not customer_folder:
-            return jsonify({
-                "error": f"Customer {customer_id} not found"
-            }), 404
-        
-        # List all files of the specified type
-        files = list(Path(customer_folder).glob(f"{data_type}_data.json"))
-        
-        if not files:
-            return jsonify({
-                "error": f"No {data_type} data files found"
-            }), 404
+            return jsonify({"error": f"Cliente {customer_id} não encontrado"}), 404
 
-        # Get the most recent file
-        latest_file = max(files, key=lambda x: x.stat().st_mtime)
+        # Passo 2: Construir o caminho para o arquivo de dados
+        data_file = DATA_PATH / customer_folder / f"{data_type}_data.json"
         
-        with open(latest_file, 'r', encoding='utf-8') as f:
+        if not data_file.exists():
+            return jsonify({"error": f"Arquivo {data_type} não encontrado para o cliente"}), 404
+
+        # Passo 3: Ler e retornar os dados
+        with open(data_file, 'r', encoding='utf-8') as f:
             data = json.load(f)
             
-        return jsonify(data)
+        return jsonify({
+            "customer_id": customer_id,
+            "data_type": data_type,
+            "data": data
+        })
 
+    except json.JSONDecodeError:
+        return jsonify({"error": "Erro ao decodificar arquivo JSON"}), 500
     except Exception as e:
         return jsonify({
             "error": f"Error reading {data_type} data",
@@ -71,7 +86,7 @@ def list_data(customer_id):
             }), 404
         
         # Get all JSON files in the data directory
-        files = list(Path(customer_folder).glob("*.json"))
+        files = list(Path(DATA_PATH / customer_folder).glob("*.json"))
         
         file_info = []
         for file in files:
