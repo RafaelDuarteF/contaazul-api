@@ -76,9 +76,9 @@ def home_new():
     auth_url = (
         f"{AUTH_NEW_URL}?response_type=code"
         f"&client_id={CLIENT_NEW_ID}"
-        f"&redirect_uri={REDIRECT_NEW_URI}" 
+        f"&redirect_uri={REDIRECT_NEW_URI}"
         f"&state={state}"
-        f"&scope=openid+profile"
+        f"&scope=openid+profile+aws.cognito.signin.user.admin"
     )
     
     return f'<h1>ContaAzul New API Integration</h1><p><a href="{auth_url}">Click here to authorize (New API)</a></p>'

@@ -74,52 +74,54 @@ class TokenNewManager:
             return None, "No refresh token found in token file"
         
         try:
-            # 1. Preparar autenticação Basic corretamente
+            # 1. Preparar autenticação Basic
             auth_string = f"{CLIENT_NEW_ID}:{CLIENT_NEW_SECRET}"
             basic_auth = "Basic " + base64.b64encode(auth_string.encode()).decode('utf-8')
             
-            # 2. Preparar headers exatos como a API espera
+            # 2. Headers conforme documentação
             headers = {
                 "Authorization": basic_auth,
                 "Content-Type": "application/x-www-form-urlencoded",
                 "Accept": "application/json"
             }
             
-            # 3. Preparar dados no formato exato que a API espera
-            data = {
+            # 3. Dados no formato que a API espera
+            payload = {
                 "grant_type": "refresh_token",
-                "refresh_token": token_info['refresh_token']
+                "refresh_token": token_info['refresh_token'],
+                "client_id": CLIENT_NEW_ID,
+                "client_secret": CLIENT_NEW_SECRET,
             }
             
-            # 4. Fazer a requisição com verificação SSL e timeout
+            # 4. Converter payload para formato x-www-form-urlencoded
+            data = "&".join([f"{k}={v}" for k, v in payload.items()])
+            
+            # 5. Fazer a requisição
             response = requests.post(
-                "https://auth.contaazul.com/oauth2/token",  # URL hardcoded para garantir
+                "https://auth.contaazul.com/oauth2/token",
                 headers=headers,
                 data=data,
-                timeout=30,
-                verify=True  # Importante para SSL
+                timeout=30
             )
             
-            # 5. Verificar resposta
+            # 6. Verificar resposta
             if response.status_code != 200:
-                error_detail = response.json().get('error_description', 'No error details')
+                error_detail = response.json().get('error_description', response.text)
                 return None, f"API Error {response.status_code}: {error_detail}"
             
             new_token_info = response.json()
             
-            # 6. Calcular nova data de expiração
+            # 7. Calcular nova data de expiração
             new_token_info['expires_at'] = (
                 datetime.now() + timedelta(seconds=new_token_info['expires_in'])
             ).isoformat()
             
-            # 7. Salvar o novo token
+            # 8. Salvar o novo token
             if not self._write_token_file(new_token_info):
                 return None, "Failed to save new token"
             
             return new_token_info, None
             
-        except requests.exceptions.SSLError as e:
-            return None, f"SSL Error: {str(e)}"
         except requests.exceptions.RequestException as e:
             return None, f"Request Failed: {str(e)}"
         except Exception as e:
