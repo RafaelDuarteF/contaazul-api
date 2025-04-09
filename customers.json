@@ -1,8 +1,8 @@
 {
-    "users": [
-        {
-            "id": "user1",
-            "folder": "cliente1"
-        }
-    ]
+  "users": [
+    {
+      "id": "assessoriaContabil",
+      "folder": "assessoriaContabil"
+    }
+  ]
 }
