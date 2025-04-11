@@ -8,6 +8,7 @@ import os
 import requests
 from flask import Blueprint, request
 import secrets
+import urllib.parse
 
 from config import (
     CLIENT_ID, CLIENT_SECRET, REDIRECT_URI, DATA_PATH,
@@ -73,13 +74,16 @@ def home_new():
     state = secrets.token_urlsafe(16)
     state_store[state] = True
     
-    auth_url = (
-        f"{AUTH_NEW_URL}?response_type=code"
-        f"&client_id={CLIENT_NEW_ID}"
-        f"&redirect_uri={REDIRECT_NEW_URI}"
-        f"&state={state}"
-        f"&scope=openid+profile+aws.cognito.signin.user.admin"
-    )
+    # Properly URL encode the parameters
+    params = {
+        "response_type": "code",
+        "client_id": CLIENT_NEW_ID,
+        "redirect_uri": REDIRECT_NEW_URI,
+        "state": state,
+        "scope": "openid profile aws.cognito.signin.user.admin"
+    }
+    
+    auth_url = f"{AUTH_NEW_URL}?{urllib.parse.urlencode(params)}"
     
     return f'<h1>ContaAzul New API Integration</h1><p><a href="{auth_url}">Click here to authorize (New API)</a></p>'
 
@@ -101,7 +105,7 @@ def callback_new():
         return jsonify({"error": "Invalid state"}), 401
 
     try:
-        # Prepare basic auth header
+        # Prepare basic auth header with proper encoding
         auth_string = f"{CLIENT_NEW_ID}:{CLIENT_NEW_SECRET}"
         basic_auth = base64.b64encode(auth_string.encode()).decode()
         
@@ -114,7 +118,8 @@ def callback_new():
             data={
                 "grant_type": "authorization_code",
                 "code": auth_code,
-                "redirect_uri": REDIRECT_NEW_URI
+                "redirect_uri": REDIRECT_NEW_URI,
+                "client_id": CLIENT_NEW_ID  # Add client_id to the request body
             }
         )
         
@@ -143,7 +148,7 @@ def callback_new():
             "error": "unknown_error",
             "message": f"An unexpected error occurred: {str(e)}"
         }), 500
-
+    
 def require_auth(f):
     @wraps(f)
     def decorated(*args, **kwargs):
