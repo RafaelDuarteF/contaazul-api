@@ -105,49 +105,64 @@ def callback_new():
         return jsonify({"error": "Invalid state"}), 401
 
     try:
-        # Prepare basic auth header with proper encoding
+        # Prepare basic auth header
         auth_string = f"{CLIENT_NEW_ID}:{CLIENT_NEW_SECRET}"
-        basic_auth = base64.b64encode(auth_string.encode()).decode()
-        
-        response = requests.post(
-            TOKEN_NEW_URL,
-            headers={
-                "Authorization": f"Basic {basic_auth}",
-                "Content-Type": "application/x-www-form-urlencoded"
-            },
-            data={
-                "grant_type": "authorization_code",
-                "code": auth_code,
-                "redirect_uri": REDIRECT_NEW_URI,
-                "client_id": CLIENT_NEW_ID  # Add client_id to the request body
-            }
-        )
-        
-        response.raise_for_status()
+        basic_auth = "Mzd1Zm9hbTc1NGY0aGNnY2VnZnZ1amRsbDQ6M2hudGE3aXU5cXBhdjZwYW9xNGhlMzRjYmJxMWdzMW1oOGpjYmx1ZXQzcDA3N2lhb25n"
+
+        headers = {
+            "Authorization": f"Basic {basic_auth}",
+            "Content-Type": "application/x-www-form-urlencoded"
+        }
+
+        data = {
+            "grant_type": "authorization_code",
+            "code": auth_code,
+            "redirect_uri": REDIRECT_NEW_URI,
+            "client_id": CLIENT_NEW_ID,
+            "client_secret": CLIENT_NEW_SECRET
+        }
+
+        print("==== DEBUG REQUEST ====")
+        print("Headers:", headers)
+        print("Data:", data)
+
+        response = requests.post(TOKEN_NEW_URL, headers=headers, data=data)
+
+        print("==== DEBUG RESPONSE ====")
+        print("Status Code:", response.status_code)
+        print("Response Text:", response.text)
+
+        response.raise_for_status()  # Isso vai gerar exceção se for 400
+
         token_info = response.json()
-        
+
         # Add expiration time
         token_info['expires_at'] = (
             datetime.now() + timedelta(seconds=token_info['expires_in'])
         ).isoformat()
 
         return jsonify(token_info)
-    
+
     except requests.exceptions.HTTPError as e:
         return jsonify({
             "error": "http_error",
-            "message": f"HTTP error occurred: {str(e)}"
+            "message": f"HTTP error occurred: {str(e)}",
+            "status_code": response.status_code,
+            "response_text": response.text  # <-- Isso mostra o motivo real!
         }), 500
+
     except requests.exceptions.RequestException as e:
         return jsonify({
             "error": "request_error",
             "message": f"Error obtaining token: {str(e)}"
         }), 500
+
     except Exception as e:
         return jsonify({
             "error": "unknown_error",
             "message": f"An unexpected error occurred: {str(e)}"
         }), 500
+
     
 def require_auth(f):
     @wraps(f)
