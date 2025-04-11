@@ -138,7 +138,6 @@ def refresh_token_endpoint(customer_id):
     if not manager.is_token_expired():
         return jsonify({
             "message": "Token is still valid",
-            "token_info": manager._read_token_file()
         })
 
     token_info, error = manager.refresh_token()
@@ -151,5 +150,4 @@ def refresh_token_endpoint(customer_id):
 
     return jsonify({
         "message": "Token refreshed successfully",
-        "token_info": token_info
     })
