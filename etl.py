@@ -149,16 +149,21 @@ class AccountsPayableETL(BaseETL):
 
     def flatten_account_payable(self, account: Dict) -> Dict:
         """Flatten the account payable data structure."""
+        # Process dates to ensure yyyy-mm-dd format
+        due_date = account.get("data_vencimento", "")
+        creation_date = account.get("data_criacao", "")
+        update_date = account.get("data_alteracao", "")
+        
         return {
             "id": account.get("id"),
             "descricao": account.get("descricao"),
-            "data_vencimento": account.get("data_vencimento"),
+            "data_vencimento": due_date[:10] if due_date else "",  # Takes only yyyy-mm-dd part
             "status": account.get("status"),
             "total": account.get("total"),
             "nao_pago": account.get("nao_pago"),
             "pago": account.get("pago"),
-            "data_criacao": account.get("data_criacao"),
-            "data_alteracao": account.get("data_alteracao")
+            "data_criacao": creation_date[:10] if creation_date else "",
+            "data_alteracao": update_date[:10] if update_date else ""
         }
 
     def search_accounts_payable(
@@ -191,16 +196,21 @@ class AccountsReceivableETL(BaseETL):
 
     def flatten_account_receivable(self, account: Dict) -> Dict:
         """Flatten the account receivable data structure."""
+        # Process dates to ensure yyyy-mm-dd format
+        due_date = account.get("data_vencimento", "")
+        creation_date = account.get("data_criacao", "")
+        update_date = account.get("data_alteracao", "")
+        
         return {
             "id": account.get("id"),
             "descricao": account.get("descricao"),
-            "data_vencimento": account.get("data_vencimento"),
+            "data_vencimento": due_date[:10] if due_date else "",  # Takes only yyyy-mm-dd part
             "status": account.get("status"),
             "total": account.get("total"),
             "nao_pago": account.get("nao_pago"),
             "pago": account.get("pago"),
-            "data_criacao": account.get("data_criacao"),
-            "data_alteracao": account.get("data_alteracao")
+            "data_criacao": creation_date[:10] if creation_date else "",
+            "data_alteracao": update_date[:10] if update_date else ""
         }
 
     def search_accounts_receivable(
@@ -262,11 +272,19 @@ class SalesETL:
             return token_data.get("access_token")
 
     def flatten_sale(self, sale: Dict) -> Dict:
+        # Process emission date
+        emission = sale.get("emission", "")
+        # Process installment due date
+        first_installment_due_date = (
+            sale.get("payment", {}).get("installments", [{}])[0].get("due_date", "")
+            if sale.get("payment", {}).get("installments") else ""
+        )
+        
         return {
             "id": sale.get("id"),
             "conta_azul_id": sale.get("contaAzulId"),
             "number": sale.get("number"),
-            "emission": sale.get("emission"),
+            "emission": emission[:10] if emission else "",  # Takes only yyyy-mm-dd part
             "status": sale.get("status"),
             "scheduled": sale.get("scheduled"),
             "customer_id": sale.get("customer", {}).get("id"),
@@ -290,10 +308,7 @@ class SalesETL:
                 sale.get("payment", {}).get("installments", [{}])[0].get("value")
                 if sale.get("payment", {}).get("installments") else None
             ),
-            "first_installment_due_date": (
-                sale.get("payment", {}).get("installments", [{}])[0].get("due_date")
-                if sale.get("payment", {}).get("installments") else None
-            )
+            "first_installment_due_date": first_installment_due_date[:10] if first_installment_due_date else ""
         }
 
     def fetch_and_transform_sales(self, access_token: str, page: int = 0, size: int = 2000) -> Optional[List[Dict]]:

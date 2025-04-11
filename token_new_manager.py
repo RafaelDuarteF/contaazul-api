@@ -110,17 +110,19 @@ class TokenNewManager:
                 return None, f"API Error {response.status_code}: {error_detail}"
             
             new_token_info = response.json()
-            
-            # 7. Calcular nova data de expiração
+
+            # Se não veio um novo refresh_token, mantém o antigo
+            if 'refresh_token' not in new_token_info:
+                new_token_info['refresh_token'] = token_info['refresh_token']
+
+            # Calcular nova data de expiração
             new_token_info['expires_at'] = (
                 datetime.now() + timedelta(seconds=new_token_info['expires_in'])
             ).isoformat()
-            
-            # 8. Salvar o novo token
+
+            # Salvar token atualizado
             if not self._write_token_file(new_token_info):
                 return None, "Failed to save new token"
-            
-            return new_token_info, None
             
         except requests.exceptions.RequestException as e:
             return None, f"Request Failed: {str(e)}"
