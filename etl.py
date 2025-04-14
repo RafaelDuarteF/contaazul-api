@@ -282,7 +282,6 @@ class SalesETL:
         
         return {
             "id": sale.get("id"),
-            "conta_azul_id": sale.get("contaAzulId"),
             "number": sale.get("number"),
             "emission": emission[:10] if emission else "",  # Takes only yyyy-mm-dd part
             "status": sale.get("status"),
@@ -304,11 +303,6 @@ class SalesETL:
             "seller_id": sale.get("seller", {}).get("id"),
             "seller_name": sale.get("seller", {}).get("name"),
             "installments_count": len(sale.get("payment", {}).get("installments", [])),
-            "first_installment_value": (
-                sale.get("payment", {}).get("installments", [{}])[0].get("value")
-                if sale.get("payment", {}).get("installments") else None
-            ),
-            "first_installment_due_date": first_installment_due_date[:10] if first_installment_due_date else ""
         }
 
     def fetch_and_transform_sales(self, access_token: str, page: int = 0, size: int = 2000) -> Optional[List[Dict]]:

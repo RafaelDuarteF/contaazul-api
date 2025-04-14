@@ -53,9 +53,7 @@ def read_data(customer_id, data_type):
             data = json.load(f)
             
         return jsonify({
-            "customer_id": customer_id,
-            "data_type": data_type,
-            "data": data
+            data
         })
 
     except json.JSONDecodeError:
