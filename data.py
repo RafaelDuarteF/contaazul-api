@@ -52,9 +52,7 @@ def read_data(customer_id, data_type):
         with open(data_file, 'r', encoding='utf-8') as f:
             data = json.load(f)
             
-        return jsonify({
-            data
-        })
+        return jsonify(data), 200
 
     except json.JSONDecodeError:
         return jsonify({"error": "Erro ao decodificar arquivo JSON"}), 500
