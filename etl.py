@@ -248,9 +248,7 @@ class CategoriesETL(BaseETL):
         while True:
             try:
                 params = {
-                    "pagina": page,
-                    "tamanho_pagina": page_size,
-                    "permite_apenas_filhos": "true",
+                    "apenas_filhos": "false",
                 }
                 
                 response = requests.get(
