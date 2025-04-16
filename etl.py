@@ -151,6 +151,8 @@ class AccountsPayableETL(BaseETL):
         super().__init__(customer_id, "/financeiro/eventos-financeiros/contas-a-pagar")
 
     def flatten_account_payable(self, account: Dict) -> Dict:
+        """Flatten the account payable data structure."""
+        # Process dates to ensure yyyy-mm-dd format
         due_date = account.get("data_vencimento", "")
         creation_date = account.get("data_criacao", "")
         update_date = account.get("data_alteracao", "")
@@ -158,71 +160,40 @@ class AccountsPayableETL(BaseETL):
         return {
             "id": account.get("id"),
             "descricao": account.get("descricao"),
-            "data_vencimento": due_date[:10] if due_date else "",
+            "data_vencimento": due_date[:10] if due_date else "",  # Takes only yyyy-mm-dd part
             "status": account.get("status"),
             "total": account.get("total"),
             "nao_pago": account.get("nao_pago"),
             "pago": account.get("pago"),
             "data_criacao": creation_date[:10] if creation_date else "",
-            "data_alteracao": update_date[:10] if update_date else "",
-            "categoria_id": account.get("categoria_id"),
-            "categoria_nome": account.get("categoria_nome")
+            "data_alteracao": update_date[:10] if update_date else ""
         }
 
-    def _get_accounts_by_category(self, access_token: str, category_id: str, date_range: Dict) -> List[Dict]:
-        filters = {
-            **date_range,
-            "ids_categorias": [category_id]
-        }
-        
-        page = 1
-        page_size = 200
-        accounts = []
-        
-        while True:
-            result = self._search_items(
-                access_token,
-                filters,
-                page,
-                page_size
-            )
-            
-            if not result or not result.get('itens'):
-                break
-                
-            for account in result['itens']:
-                account['categoria_id'] = category_id
-                accounts.append(account)
-            
-            if len(result['itens']) < page_size:
-                break
-                
-            page += 1
-            
-        return accounts
+    def search_accounts_payable(
+        self,
+        access_token: str,
+        filters: Dict,
+        page: int = 0,
+        page_size: int = 100,
+        ascending_field: Optional[str] = None,
+        descending_field: Optional[str] = None
+    ) -> Optional[Dict]:
+        """Search accounts payable with filters."""
+        return self._search_items(
+            access_token,
+            filters,
+            page,
+            page_size,
+            ascending_field,
+            descending_field
+        )
 
-    def search_accounts_with_categories(self, access_token: str, date_range: Dict) -> List[Dict]:
-        categories = self._get_categories_data()
-        all_accounts = []
-        
-        for category in tqdm(categories, desc="Processing categories"):
-            # Só considera categorias filhas (onde categoria_pai existe)
-            if not category.get('categoria_pai'):
-                continue
-                
-            category_id = category.get('id')
-            if not category_id:
-                continue
-                
-            accounts = self._get_accounts_by_category(access_token, category_id, date_range)
-            
-            for account in accounts:
-                account['categoria_nome'] = category.get('nome')
-                account['categoria_pai_id'] = category.get('categoria_pai')  # Adiciona ID da categoria pai
-                all_accounts.append(account)
-                
-        return all_accounts
+    def save_accounts_payable(self, accounts: List[Dict]):
+        """Save accounts payable data to a JSON file."""
+        return self._save_items(accounts, "accounts_payable_data.json")
+
     
+
 class CategoriesETL(BaseETL):
     def __init__(self, customer_id):
         super().__init__(customer_id, "/categorias")
@@ -285,6 +256,8 @@ class AccountsReceivableETL(BaseETL):
         super().__init__(customer_id, "/financeiro/eventos-financeiros/contas-a-receber")
 
     def flatten_account_receivable(self, account: Dict) -> Dict:
+        """Flatten the account receivable data structure."""
+        # Process dates to ensure yyyy-mm-dd format
         due_date = account.get("data_vencimento", "")
         creation_date = account.get("data_criacao", "")
         update_date = account.get("data_alteracao", "")
@@ -292,67 +265,37 @@ class AccountsReceivableETL(BaseETL):
         return {
             "id": account.get("id"),
             "descricao": account.get("descricao"),
-            "data_vencimento": due_date[:10] if due_date else "",
+            "data_vencimento": due_date[:10] if due_date else "",  # Takes only yyyy-mm-dd part
             "status": account.get("status"),
             "total": account.get("total"),
             "nao_pago": account.get("nao_pago"),
             "pago": account.get("pago"),
             "data_criacao": creation_date[:10] if creation_date else "",
-            "data_alteracao": update_date[:10] if update_date else "",
-            "categoria_id": account.get("categoria_id"),
-            "categoria_nome": account.get("categoria_nome")
+            "data_alteracao": update_date[:10] if update_date else ""
         }
 
-    def _get_accounts_by_category(self, access_token: str, category_id: str, date_range: Dict) -> List[Dict]:
-        filters = {
-            **date_range,
-            "ids_categorias": [category_id]
-        }
-        
-        page = 1
-        page_size = 200
-        accounts = []
-        
-        while True:
-            result = self._search_items(
-                access_token,
-                filters,
-                page,
-                page_size
-            )
-            
-            if not result or not result.get('itens'):
-                break
-                
-            for account in result['itens']:
-                account['categoria_id'] = category_id
-                accounts.append(account)
-            
-            if len(result['itens']) < page_size:
-                break
-                
-            page += 1
-            
-        return accounts
+    def search_accounts_receivable(
+        self,
+        access_token: str,
+        filters: Dict,
+        page: int = 0,
+        page_size: int = 100,
+        ascending_field: Optional[str] = None,
+        descending_field: Optional[str] = None
+    ) -> Optional[Dict]:
+        """Search accounts receivable with filters."""
+        return self._search_items(
+            access_token,
+            filters,
+            page,
+            page_size,
+            ascending_field,
+            descending_field
+        )
 
-    def search_accounts_with_categories(self, access_token: str, date_range: Dict) -> List[Dict]:
-        categories = self._get_categories_data()
-        all_accounts = []
-        
-        for category in tqdm(categories, desc="Processing categories"):
-            category_id = category.get('id')
-            if not category_id:
-                continue
-                
-            accounts = self._get_accounts_by_category(access_token, category_id, date_range)
-            
-            # Add category name to each account
-            for account in accounts:
-                account['categoria_nome'] = category.get('nome')
-            
-            all_accounts.extend(accounts)
-                
-        return all_accounts
+    def save_accounts_receivable(self, accounts: List[Dict]):
+        """Save accounts receivable data to a JSON file."""
+        return self._save_items(accounts, "accounts_receivable_data.json")
 
 
 class SalesETL:
@@ -498,6 +441,7 @@ def extract_sales(customer_id):
 
 @etl_bp.route('/contas-a-pagar/<customer_id>', methods=['GET'])
 def search_accounts_payable(customer_id):
+    """Endpoint to search and save accounts payable."""
     etl = AccountsPayableETL(customer_id)
     access_token = etl._get_token()
     
@@ -507,6 +451,7 @@ def search_accounts_payable(customer_id):
             "message": "Please authenticate first using /auth-new"
         }), 401
 
+    # Get search parameters from request
     try:
         request_data = request.get_json()
         if not request_data:
@@ -514,34 +459,70 @@ def search_accounts_payable(customer_id):
     except Exception:
         request_data = {}
 
+    # Use fixed date range
     today = datetime.now().strftime("%Y-%m-%d")
     date_range = {
         "data_vencimento_de": "2023-01-01",
         "data_vencimento_ate": today
     }
 
-    # Busca contas com informações de categoria
-    accounts = etl.search_accounts_with_categories(access_token, date_range)
+    # Initialize pagination parameters
+    page = 1
+    page_size = 400
+    ascending_field = None
+    descending_field = None
+    all_items = []
 
-    if not accounts:
-        return jsonify({
-            "message": "No accounts payable found",
-            "total_items": 0,
-            "data": []
-        }), 200
+    while True:
+        # Search accounts payable
+        result = etl.search_accounts_payable(
+            access_token,
+            {**date_range, **request_data},
+            page,
+            page_size,
+            ascending_field,
+            descending_field
+        )
+        
+        if not result:
+            return jsonify({
+                "error": "Search failed",
+                "message": "Failed to retrieve accounts payable data"
+            }), 500
 
-    flattened = [etl.flatten_account_payable(acc) for acc in accounts]
-    output_file = etl.save_accounts_payable(flattened)
+        # If no items found, return empty list
+        if not result.get('itens'):
+            if page == 1:  # First page empty
+                return jsonify({
+                    "message": "No accounts payable found matching the criteria",
+                    "total_items": 0,
+                    "data": []
+                }), 200
+            break  # No more items to fetch
+
+        # Add items to our list
+        all_items.extend(result['itens'])
+
+        # Check if we need to fetch more pages
+        if len(result['itens']) < page_size:
+            break  # Last page
+
+        page += 1
+
+    # Flatten and save all items
+    accounts = [etl.flatten_account_payable(account) for account in all_items]
+    output_file = etl.save_accounts_payable(accounts)
     
     return jsonify({
-        "message": "Accounts payable with categories extracted successfully",
-        "total_items": len(flattened),
-        "output_file": str(output_file)
+        "message": "Accounts payable data extracted successfully",
+        "total_items": len(accounts),
+        "output_file": str(output_file),
     })
 
 
 @etl_bp.route('/contas-a-receber/<customer_id>', methods=['GET'])
 def search_accounts_receivable(customer_id):
+    """Endpoint to search and save accounts receivable."""
     etl = AccountsReceivableETL(customer_id)
     access_token = etl._get_token()
     
@@ -551,6 +532,7 @@ def search_accounts_receivable(customer_id):
             "message": "Please authenticate first using /auth-new"
         }), 401
 
+    # Get search parameters from request
     try:
         request_data = request.get_json()
         if not request_data:
@@ -558,29 +540,64 @@ def search_accounts_receivable(customer_id):
     except Exception:
         request_data = {}
 
+    # Use fixed date range
     today = datetime.now().strftime("%Y-%m-%d")
     date_range = {
         "data_vencimento_de": "2023-01-01",
         "data_vencimento_ate": today
     }
 
-    # Busca contas com informações de categoria
-    accounts = etl.search_accounts_with_categories(access_token, date_range)
+    # Initialize pagination parameters
+    page = 1
+    page_size = 100
+    ascending_field = None
+    descending_field = None
+    all_items = []
 
-    if not accounts:
-        return jsonify({
-            "message": "No accounts receivable found",
-            "total_items": 0,
-            "data": []
-        }), 200
+    while True:
+        # Search accounts receivable
+        result = etl.search_accounts_receivable(
+            access_token,
+            {**date_range, **request_data},
+            page,
+            page_size,
+            ascending_field,
+            descending_field
+        )
+        
+        if not result:
+            return jsonify({
+                "error": "Search failed",
+                "message": "Failed to retrieve accounts receivable data"
+            }), 500
 
-    flattened = [etl.flatten_account_receivable(acc) for acc in accounts]
-    output_file = etl.save_accounts_receivable(flattened)
+        # If no items found, return empty list
+        if not result.get('itens'):
+            if page == 1:  # First page empty
+                return jsonify({
+                    "message": "No accounts receivable found matching the criteria",
+                    "total_items": 0,
+                    "data": []
+                }), 200
+            break  # No more items to fetch
+
+        # Add items to our list
+        all_items.extend(result['itens'])
+
+        # Check if we need to fetch more pages
+        if len(result['itens']) < page_size:
+            break  # Last page
+
+        page += 1
+
+    # Flatten and save all items
+    accounts = [etl.flatten_account_receivable(account) for account in all_items]
+    output_file = etl.save_accounts_receivable(accounts)
     
     return jsonify({
-        "message": "Accounts receivable with categories extracted successfully",
-        "total_items": len(flattened),
-        "output_file": str(output_file)
+        "message": "Accounts receivable data extracted successfully",
+        "total_items": len(accounts),
+        "output_file": str(output_file),
     })
 
 @etl_bp.route('/categorias/<customer_id>', methods=['GET'])
