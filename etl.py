@@ -226,6 +226,9 @@ class CategoriesETL(BaseETL):
 
     def flatten_category(self, category: Dict) -> Dict:
         """Flatten the category data structure."""
+        if not isinstance(category, dict):
+            return {"id": str(category)}
+            
         return {
             "id": category.get("id"),
             "nome": category.get("nome"),
@@ -236,45 +239,38 @@ class CategoriesETL(BaseETL):
             "considera_custo_dre": category.get("considera_custo_dre")
         }
 
-    def fetch_all_categories(
-        self,
-        access_token: str,
-        page_size: int = 100
-    ) -> Optional[List[Dict]]:
-        """Fetch all categories with pagination."""
-        page = 0
-        all_categories = []
-        
-        while True:
-            try:
-                params = {
-                    "apenas_filhos": "false",
-                }
+    def fetch_all_categories(self, access_token: str) -> Optional[List[Dict]]:
+        """Fetch all categories in a single request"""
+        try:
+            params = {
+                "tamanho_pagina": 1000,
+                "apenas_filhos": "false"
+            }
+            
+            response = requests.get(
+                f"{self.base_url}{self.endpoint}",
+                headers=self._get_headers(access_token),
+                params=params
+            )
+            response.raise_for_status()
+            
+            response_data = response.json()
+            
+            # Verifica se as categorias estão dentro de uma propriedade 'itens'
+            if isinstance(response_data, dict) and 'itens' in response_data:
+                categories = response_data['itens']
+            else:
+                categories = response_data
                 
-                response = requests.get(
-                    f"{self.base_url}{self.endpoint}",
-                    headers=self._get_headers(access_token),
-                    params=params
-                )
-                response.raise_for_status()
-                
-                categories = response.json()
-                if not categories:
-                    break
-                    
-                all_categories.extend(categories)
-                
-                # If we got less items than requested, we've reached the end
-                if len(categories) < page_size:
-                    break
-                    
-                page += 1
-                
-            except requests.exceptions.RequestException as e:
-                print(f"Error fetching categories page {page}: {e}")
+            if not categories or not isinstance(categories, list):
                 return None
-        
-        return all_categories
+                
+            # Filtra apenas os itens que são dicionários (objetos de categoria)
+            return [c for c in categories if isinstance(c, dict)]
+            
+        except requests.exceptions.RequestException as e:
+            print(f"Error fetching categories: {e}")
+            return None
 
     def save_categories(self, categories: List[Dict]):
         """Save categories data to a JSON file."""
