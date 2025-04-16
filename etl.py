@@ -175,8 +175,8 @@ class AccountsPayableETL(BaseETL):
             "ids_categorias": [category_id]
         }
         
-        page = 0
-        page_size = 100
+        page = 1
+        page_size = 200
         accounts = []
         
         while True:
@@ -206,17 +206,20 @@ class AccountsPayableETL(BaseETL):
         all_accounts = []
         
         for category in tqdm(categories, desc="Processing categories"):
+            # Só considera categorias filhas (onde categoria_pai existe)
+            if not category.get('categoria_pai'):
+                continue
+                
             category_id = category.get('id')
             if not category_id:
                 continue
                 
             accounts = self._get_accounts_by_category(access_token, category_id, date_range)
             
-            # Add category name to each account
             for account in accounts:
                 account['categoria_nome'] = category.get('nome')
-            
-            all_accounts.extend(accounts)
+                account['categoria_pai_id'] = category.get('categoria_pai')  # Adiciona ID da categoria pai
+                all_accounts.append(account)
                 
         return all_accounts
     
@@ -306,8 +309,8 @@ class AccountsReceivableETL(BaseETL):
             "ids_categorias": [category_id]
         }
         
-        page = 0
-        page_size = 100
+        page = 1
+        page_size = 200
         accounts = []
         
         while True:
