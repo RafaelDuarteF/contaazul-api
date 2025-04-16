@@ -2,7 +2,7 @@ import json
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional
-
+import time
 import requests
 from flask import Blueprint, jsonify, request
 from tqdm import tqdm
@@ -640,10 +640,9 @@ def get_all_categories(customer_id):
         "output_file": str(output_file),
     })
 
-
 @etl_bp.route('/contas-a-receber-com-categorias/<customer_id>', methods=['GET'])
-def search_accounts_receivable_with_categories(customer_id):
-    """Endpoint to search and save accounts receivable with category information."""
+def search_accounts_receivable_with_parent_categories_optimized(customer_id):
+    """Endpoint otimizado para buscar contas a receber apenas de categorias pai."""
     etl = AccountsReceivableETL(customer_id)
     access_token = etl._get_token()
     
@@ -653,11 +652,21 @@ def search_accounts_receivable_with_categories(customer_id):
             "message": "Please authenticate first using /auth-new"
         }), 401
 
-    # Get all parent categories (without categoria_pai)
-    parent_categories = [
-        cat for cat in etl._get_categories_data() 
-        if not cat.get('categoria_pai')
-    ]
+    # 1. Busca categorias pai de forma mais eficiente
+    parent_categories = []
+    try:
+        categories_data = etl._get_categories_data()
+        parent_categories = [
+            {'id': cat['id'], 'nome': cat['nome']} 
+            for cat in categories_data 
+            if not cat.get('categoria_pai')
+        ]
+    except Exception as e:
+        print(f"Error loading categories: {e}")
+        return jsonify({
+            "error": "Failed to load categories",
+            "message": str(e)
+        }), 500
 
     if not parent_categories:
         return jsonify({
@@ -665,38 +674,35 @@ def search_accounts_receivable_with_categories(customer_id):
             "message": "Please fetch categories first using /categorias endpoint"
         }), 400
 
-    # Use fixed date range
-    today = datetime.now().strftime("%Y-%m-%d")
+    # 2. Configuração otimizada
     date_range = {
         "data_vencimento_de": "2023-01-01",
-        "data_vencimento_ate": today
+        "data_vencimento_ate": datetime.now().strftime("%Y-%m-%d")
     }
+    page_size = 400  # Máximo permitido pela API
+    retry_limit = 3
+    delay_between_requests = 0.3  # 300ms entre requisições
 
     all_items = []
-    
-    # Search for accounts receivable for each parent category
-    with tqdm(parent_categories, desc="Processing categories") as pbar:
+    category_map = {cat['id']: cat['nome'] for cat in parent_categories}
+
+    # 3. Busca paralela por categoria (com controle de rate limit)
+    with tqdm(parent_categories, desc="Processing parent categories") as pbar:
         for category in pbar:
-            category_id = category.get('id')
-            if category_id:
-                continue
-                
-            pbar.set_postfix({'category': category.get('nome', '')})
+            category_id = category['id']
+            pbar.set_postfix({'category': category['nome'][:15] + '...'})
             
-            # Initialize pagination for this category
             page = 1
-            page_size = 100
+            attempts = 0
             has_more = True
             
-            while has_more:
+            while has_more and attempts < retry_limit:
                 try:
-                    # Search with category filter
+                    time.sleep(delay_between_requests)
+                    
                     result = etl.search_accounts_receivable(
                         access_token,
-                        {
-                            **date_range,
-                            "ids_categorias": [category_id]
-                        },
+                        {**date_range, "ids_categorias": [category_id]},
                         page,
                         page_size
                     )
@@ -704,50 +710,73 @@ def search_accounts_receivable_with_categories(customer_id):
                     if not result or not result.get('itens'):
                         has_more = False
                         continue
-                        
-                    # Add category info to each item
+                    
+                    # Adiciona informações de categoria diretamente
                     for item in result['itens']:
                         item['categoria_principal_id'] = category_id
-                        item['categoria_principal_nome'] = category.get('nome')
+                        item['categoria_principal_nome'] = category['nome']
                     
                     all_items.extend(result['itens'])
                     
-                    # Check if we need to fetch more pages
+                    # Verifica se há mais páginas
                     if len(result['itens']) < page_size:
                         has_more = False
                     else:
                         page += 1
+                    
+                    attempts = 0  # Reset attempts after success
                         
+                except requests.exceptions.HTTPError as e:
+                    if e.response.status_code == 429:  # Too Many Requests
+                        delay_between_requests *= 2  # Exponential backoff
+                        print(f"Rate limit hit, increasing delay to {delay_between_requests}s")
+                    attempts += 1
+                    print(f"Attempt {attempts} failed for category {category_id}: {e}")
                 except Exception as e:
                     print(f"Error processing category {category_id}: {e}")
                     has_more = False
 
+    # 4. Processamento otimizado dos resultados
     if not all_items:
         return jsonify({
-            "message": "No accounts receivable found matching the criteria",
+            "message": "No accounts receivable found for parent categories",
             "total_items": 0,
             "data": []
         }), 200
 
-    # Flatten and save all items
-    accounts = [etl.flatten_account_receivable(account) for account in all_items]
-    
-    # Add category info to flattened data
-    for account in accounts:
-        account['categoria_principal_id'] = next(
-            (item.get('categoria_principal_id') for item in all_items 
-            if item.get('id') == account.get('id')
-        ))
-        account['categoria_principal_nome'] = next(
-            (item.get('categoria_principal_nome') for item in all_items 
-            if item.get('id') == account.get('id')
-        ))
+    # Otimização: Usa dict comprehension para mapeamento mais rápido
+    accounts_dict = {item['id']: item for item in all_items}
 
-    output_file = etl.save_accounts_receivable(accounts)
-    
-    return jsonify({
-        "message": "Accounts receivable with categories extracted successfully",
-        "total_items": len(accounts),
-        "output_file": str(output_file),
-        "categories_processed": len(parent_categories)
-    })
+    # Processamento em lote
+    accounts = []
+    for item_id, item in accounts_dict.items():
+        try:
+            flat_account = etl.flatten_account_receivable(item)
+            flat_account.update({
+                'categoria_principal_id': item['categoria_principal_id'],
+                'categoria_principal_nome': item['categoria_principal_nome']
+            })
+            accounts.append(flat_account)
+        except Exception as e:
+            print(f"Error processing account {item_id}: {e}")
+
+    # 5. Salvamento otimizado
+    try:
+        output_file = etl.save_accounts_receivable(accounts)
+        return jsonify({
+            "message": "Accounts receivable with parent categories extracted successfully",
+            "total_items": len(accounts),
+            "output_file": str(output_file),
+            "parent_categories_processed": len(parent_categories),
+            "performance_notes": {
+                "initial_delay": f"{delay_between_requests}s between requests",
+                "retry_limit": retry_limit,
+                "max_page_size": page_size
+            }
+        })
+    except Exception as e:
+        print(f"Error saving results: {e}")
+        return jsonify({
+            "error": "Failed to save results",
+            "message": str(e)
+        }), 500
