@@ -782,3 +782,144 @@ def search_accounts_receivable_with_parent_categories_optimized(customer_id):
             "error": "Failed to save results",
             "message": str(e)
         }), 500
+    
+
+@etl_bp.route('/contas-a-pagar-com-categorias/<customer_id>', methods=['GET'])
+def search_accounts_payable_with_parent_categories_optimized(customer_id):
+    """Endpoint otimizado para buscar contas a pagar apenas de categorias pai."""
+    etl = AccountsPayableETL(customer_id)  # Usando a classe AccountsPayableETL
+    access_token = etl._get_token()
+    
+    if not access_token:
+        return jsonify({
+            "error": "No access token found",
+            "message": "Please authenticate first using /auth-new"
+        }), 401
+
+    # 1. Busca categorias pai de DESPESA de forma mais eficiente
+    parent_categories = []
+    try:
+        categories_data = etl._get_categories_data()
+        parent_categories = [
+            {'id': cat['id'], 'nome': cat['nome']} 
+            for cat in categories_data 
+            if cat.get('categoria_pai')
+            and cat['tipo'] == 'DESPESA'  # Filtro alterado para DESPESA
+        ]
+    except Exception as e:
+        print(f"Error loading categories: {e}")
+        return jsonify({
+            "error": "Failed to load categories",
+            "message": str(e)
+        }), 500
+
+    if not parent_categories:
+        return jsonify({
+            "error": "No parent categories found for DESPESA",
+            "message": "Please fetch categories first using /categorias endpoint"
+        }), 400
+
+    # 2. Configuração otimizada (igual ao anterior)
+    date_range = {
+        "data_vencimento_de": "2023-01-01",
+        "data_vencimento_ate": datetime.now().strftime("%Y-%m-%d")
+    }
+    page_size = 400
+    retry_limit = 3
+    delay_between_requests = 0.3
+
+    all_items = []
+    category_map = {cat['id']: cat['nome'] for cat in parent_categories}
+
+    # 3. Busca por categoria (com controle de rate limit)
+    with tqdm(parent_categories, desc="Processing DESPESA parent categories") as pbar:
+        for category in pbar:
+            category_id = category['id']
+            pbar.set_postfix({'category': category['nome'][:15] + '...'})
+            
+            page = 1
+            attempts = 0
+            has_more = True
+            
+            while has_more and attempts < retry_limit:
+                try:
+                    time.sleep(delay_between_requests)
+                    
+                    # Usa search_accounts_payable em vez de search_accounts_receivable
+                    result = etl.search_accounts_payable(
+                        access_token,
+                        {**date_range, "ids_categorias": [category_id]},
+                        page,
+                        page_size
+                    )
+                    
+                    if not result or not result.get('itens'):
+                        has_more = False
+                        continue
+                    
+                    for item in result['itens']:
+                        item['categoria_principal_id'] = category_id
+                        item['categoria_principal_nome'] = category['nome']
+                    
+                    all_items.extend(result['itens'])
+                    
+                    if len(result['itens']) < page_size:
+                        has_more = False
+                    else:
+                        page += 1
+                    
+                    attempts = 0
+                        
+                except requests.exceptions.HTTPError as e:
+                    if e.response.status_code == 429:
+                        delay_between_requests *= 2
+                        print(f"Rate limit hit, increasing delay to {delay_between_requests}s")
+                    attempts += 1
+                    print(f"Attempt {attempts} failed for category {category_id}: {e}")
+                except Exception as e:
+                    print(f"Error processing category {category_id}: {e}")
+                    has_more = False
+
+    # 4. Processamento dos resultados
+    if not all_items:
+        return jsonify({
+            "message": "No accounts payable found for parent categories",
+            "total_items": 0,
+            "data": []
+        }), 200
+
+    accounts_dict = {item['id']: item for item in all_items}
+
+    accounts = []
+    for item_id, item in accounts_dict.items():
+        try:
+            # Usa flatten_account_payable em vez de flatten_account_receivable
+            flat_account = etl.flatten_account_payable(item)
+            flat_account.update({
+                'categoria_principal_id': item['categoria_principal_id'],
+                'categoria_principal_nome': item['categoria_principal_nome']
+            })
+            accounts.append(flat_account)
+        except Exception as e:
+            print(f"Error processing account {item_id}: {e}")
+
+    # 5. Salvamento
+    try:
+        output_file = etl.save_accounts_payable(accounts)  # Método específico para contas a pagar
+        return jsonify({
+            "message": "Accounts payable with parent categories extracted successfully",
+            "total_items": len(accounts),
+            "output_file": str(output_file),
+            "parent_categories_processed": len(parent_categories),
+            "performance_notes": {
+                "initial_delay": f"{delay_between_requests}s between requests",
+                "retry_limit": retry_limit,
+                "max_page_size": page_size
+            }
+        })
+    except Exception as e:
+        print(f"Error saving results: {e}")
+        return jsonify({
+            "error": "Failed to save results",
+            "message": str(e)
+        }), 500
