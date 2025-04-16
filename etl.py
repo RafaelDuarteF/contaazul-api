@@ -249,7 +249,8 @@ class CategoriesETL(BaseETL):
             try:
                 params = {
                     "pagina": page,
-                    "tamanho_pagina": page_size
+                    "tamanho_pagina": page_size,
+                    "permite_apenas_filhos": False,
                 }
                 
                 response = requests.get(
