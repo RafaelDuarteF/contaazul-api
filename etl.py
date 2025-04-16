@@ -678,7 +678,7 @@ def search_accounts_receivable_with_categories(customer_id):
     with tqdm(parent_categories, desc="Processing categories") as pbar:
         for category in pbar:
             category_id = category.get('id')
-            if not category_id:
+            if category_id:
                 continue
                 
             pbar.set_postfix({'category': category.get('nome', '')})
