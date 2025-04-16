@@ -639,3 +639,115 @@ def get_all_categories(customer_id):
         "total_items": len(categories),
         "output_file": str(output_file),
     })
+
+
+@etl_bp.route('/contas-a-receber-com-categorias/<customer_id>', methods=['GET'])
+def search_accounts_receivable_with_categories(customer_id):
+    """Endpoint to search and save accounts receivable with category information."""
+    etl = AccountsReceivableETL(customer_id)
+    access_token = etl._get_token()
+    
+    if not access_token:
+        return jsonify({
+            "error": "No access token found",
+            "message": "Please authenticate first using /auth-new"
+        }), 401
+
+    # Get all parent categories (without categoria_pai)
+    parent_categories = [
+        cat for cat in etl._get_categories_data() 
+        if not cat.get('categoria_pai')
+    ]
+
+    if not parent_categories:
+        return jsonify({
+            "error": "No parent categories found",
+            "message": "Please fetch categories first using /categorias endpoint"
+        }), 400
+
+    # Use fixed date range
+    today = datetime.now().strftime("%Y-%m-%d")
+    date_range = {
+        "data_vencimento_de": "2023-01-01",
+        "data_vencimento_ate": today
+    }
+
+    all_items = []
+    
+    # Search for accounts receivable for each parent category
+    with tqdm(parent_categories, desc="Processing categories") as pbar:
+        for category in pbar:
+            category_id = category.get('id')
+            if not category_id:
+                continue
+                
+            pbar.set_postfix({'category': category.get('nome', '')})
+            
+            # Initialize pagination for this category
+            page = 1
+            page_size = 100
+            has_more = True
+            
+            while has_more:
+                try:
+                    # Search with category filter
+                    result = etl.search_accounts_receivable(
+                        access_token,
+                        {
+                            **date_range,
+                            "ids_categorias": [category_id]
+                        },
+                        page,
+                        page_size
+                    )
+                    
+                    if not result or not result.get('itens'):
+                        has_more = False
+                        continue
+                        
+                    # Add category info to each item
+                    for item in result['itens']:
+                        item['categoria_principal_id'] = category_id
+                        item['categoria_principal_nome'] = category.get('nome')
+                    
+                    all_items.extend(result['itens'])
+                    
+                    # Check if we need to fetch more pages
+                    if len(result['itens']) < page_size:
+                        has_more = False
+                    else:
+                        page += 1
+                        
+                except Exception as e:
+                    print(f"Error processing category {category_id}: {e}")
+                    has_more = False
+
+    if not all_items:
+        return jsonify({
+            "message": "No accounts receivable found matching the criteria",
+            "total_items": 0,
+            "data": []
+        }), 200
+
+    # Flatten and save all items
+    accounts = [etl.flatten_account_receivable(account) for account in all_items]
+    
+    # Add category info to flattened data
+    for account in accounts:
+        account['categoria_principal_id'] = next(
+            (item.get('categoria_principal_id') for item in all_items 
+            if item.get('id') == account.get('id')
+        ))
+        account['categoria_principal_nome'] = next(
+            (item.get('categoria_principal_nome') for item in all_items 
+            if item.get('id') == account.get('id')
+        ))
+
+    output_file = etl.save_accounts_receivable(accounts)
+    
+    return jsonify({
+        "message": "Accounts receivable with categories extracted successfully",
+        "total_items": len(accounts),
+        "output_file": str(output_file),
+        "categories_processed": len(parent_categories)
+    })
