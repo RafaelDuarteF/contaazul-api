@@ -659,8 +659,9 @@ def search_accounts_receivable_with_parent_categories_optimized(customer_id):
         parent_categories = [
             {'id': cat['id'], 'nome': cat['nome']} 
             for cat in categories_data 
-            if not cat.get('categoria_pai')
+            if cat.get('categoria_pai')
         ]
+        
     except Exception as e:
         print(f"Error loading categories: {e}")
         return jsonify({
