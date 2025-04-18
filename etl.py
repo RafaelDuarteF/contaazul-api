@@ -439,166 +439,166 @@ def extract_sales(customer_id):
     })
 
 
-@etl_bp.route('/contas-a-pagar/<customer_id>', methods=['GET'])
-def search_accounts_payable(customer_id):
-    """Endpoint to search and save accounts payable."""
-    etl = AccountsPayableETL(customer_id)
-    access_token = etl._get_token()
+# @etl_bp.route('/contas-a-pagar/<customer_id>', methods=['GET'])
+# def search_accounts_payable(customer_id):
+#     """Endpoint to search and save accounts payable."""
+#     etl = AccountsPayableETL(customer_id)
+#     access_token = etl._get_token()
     
-    if not access_token:
-        return jsonify({
-            "error": "No access token found",
-            "message": "Please authenticate first using /auth-new"
-        }), 401
+#     if not access_token:
+#         return jsonify({
+#             "error": "No access token found",
+#             "message": "Please authenticate first using /auth-new"
+#         }), 401
 
-    # Get search parameters from request
-    try:
-        request_data = request.get_json()
-        if not request_data:
-            request_data = {}
-    except Exception:
-        request_data = {}
+#     # Get search parameters from request
+#     try:
+#         request_data = request.get_json()
+#         if not request_data:
+#             request_data = {}
+#     except Exception:
+#         request_data = {}
 
-    # Use fixed date range
-    today = datetime.now().strftime("%Y-%m-%d")
-    date_range = {
-        "data_vencimento_de": "2023-01-01",
-        "data_vencimento_ate": today
-    }
+#     # Use fixed date range
+#     today = datetime.now().strftime("%Y-%m-%d")
+#     date_range = {
+#         "data_vencimento_de": "2023-01-01",
+#         "data_vencimento_ate": today
+#     }
 
-    # Initialize pagination parameters
-    page = 1
-    page_size = 400
-    ascending_field = None
-    descending_field = None
-    all_items = []
+#     # Initialize pagination parameters
+#     page = 1
+#     page_size = 400
+#     ascending_field = None
+#     descending_field = None
+#     all_items = []
 
-    while True:
-        # Search accounts payable
-        result = etl.search_accounts_payable(
-            access_token,
-            {**date_range, **request_data},
-            page,
-            page_size,
-            ascending_field,
-            descending_field
-        )
+#     while True:
+#         # Search accounts payable
+#         result = etl.search_accounts_payable(
+#             access_token,
+#             {**date_range, **request_data},
+#             page,
+#             page_size,
+#             ascending_field,
+#             descending_field
+#         )
         
-        if not result:
-            return jsonify({
-                "error": "Search failed",
-                "message": "Failed to retrieve accounts payable data"
-            }), 500
+#         if not result:
+#             return jsonify({
+#                 "error": "Search failed",
+#                 "message": "Failed to retrieve accounts payable data"
+#             }), 500
 
-        # If no items found, return empty list
-        if not result.get('itens'):
-            if page == 1:  # First page empty
-                return jsonify({
-                    "message": "No accounts payable found matching the criteria",
-                    "total_items": 0,
-                    "data": []
-                }), 200
-            break  # No more items to fetch
+#         # If no items found, return empty list
+#         if not result.get('itens'):
+#             if page == 1:  # First page empty
+#                 return jsonify({
+#                     "message": "No accounts payable found matching the criteria",
+#                     "total_items": 0,
+#                     "data": []
+#                 }), 200
+#             break  # No more items to fetch
 
-        # Add items to our list
-        all_items.extend(result['itens'])
+#         # Add items to our list
+#         all_items.extend(result['itens'])
 
-        # Check if we need to fetch more pages
-        if len(result['itens']) < page_size:
-            break  # Last page
+#         # Check if we need to fetch more pages
+#         if len(result['itens']) < page_size:
+#             break  # Last page
 
-        page += 1
+#         page += 1
 
-    # Flatten and save all items
-    accounts = [etl.flatten_account_payable(account) for account in all_items]
-    output_file = etl.save_accounts_payable(accounts)
+#     # Flatten and save all items
+#     accounts = [etl.flatten_account_payable(account) for account in all_items]
+#     output_file = etl.save_accounts_payable(accounts)
     
-    return jsonify({
-        "message": "Accounts payable data extracted successfully",
-        "total_items": len(accounts),
-        "output_file": str(output_file),
-    })
+#     return jsonify({
+#         "message": "Accounts payable data extracted successfully",
+#         "total_items": len(accounts),
+#         "output_file": str(output_file),
+#     })
 
 
-@etl_bp.route('/contas-a-receber/<customer_id>', methods=['GET'])
-def search_accounts_receivable(customer_id):
-    """Endpoint to search and save accounts receivable."""
-    etl = AccountsReceivableETL(customer_id)
-    access_token = etl._get_token()
+# @etl_bp.route('/contas-a-receber/<customer_id>', methods=['GET'])
+# def search_accounts_receivable(customer_id):
+#     """Endpoint to search and save accounts receivable."""
+#     etl = AccountsReceivableETL(customer_id)
+#     access_token = etl._get_token()
     
-    if not access_token:
-        return jsonify({
-            "error": "No access token found",
-            "message": "Please authenticate first using /auth-new"
-        }), 401
+#     if not access_token:
+#         return jsonify({
+#             "error": "No access token found",
+#             "message": "Please authenticate first using /auth-new"
+#         }), 401
 
-    # Get search parameters from request
-    try:
-        request_data = request.get_json()
-        if not request_data:
-            request_data = {}
-    except Exception:
-        request_data = {}
+#     # Get search parameters from request
+#     try:
+#         request_data = request.get_json()
+#         if not request_data:
+#             request_data = {}
+#     except Exception:
+#         request_data = {}
 
-    # Use fixed date range
-    today = datetime.now().strftime("%Y-%m-%d")
-    date_range = {
-        "data_vencimento_de": "2023-01-01",
-        "data_vencimento_ate": today
-    }
+#     # Use fixed date range
+#     today = datetime.now().strftime("%Y-%m-%d")
+#     date_range = {
+#         "data_vencimento_de": "2023-01-01",
+#         "data_vencimento_ate": today
+#     }
 
-    # Initialize pagination parameters
-    page = 1
-    page_size = 100
-    ascending_field = None
-    descending_field = None
-    all_items = []
+#     # Initialize pagination parameters
+#     page = 1
+#     page_size = 100
+#     ascending_field = None
+#     descending_field = None
+#     all_items = []
 
-    while True:
-        # Search accounts receivable
-        result = etl.search_accounts_receivable(
-            access_token,
-            {**date_range, **request_data},
-            page,
-            page_size,
-            ascending_field,
-            descending_field
-        )
+#     while True:
+#         # Search accounts receivable
+#         result = etl.search_accounts_receivable(
+#             access_token,
+#             {**date_range, **request_data},
+#             page,
+#             page_size,
+#             ascending_field,
+#             descending_field
+#         )
         
-        if not result:
-            return jsonify({
-                "error": "Search failed",
-                "message": "Failed to retrieve accounts receivable data"
-            }), 500
+#         if not result:
+#             return jsonify({
+#                 "error": "Search failed",
+#                 "message": "Failed to retrieve accounts receivable data"
+#             }), 500
 
-        # If no items found, return empty list
-        if not result.get('itens'):
-            if page == 1:  # First page empty
-                return jsonify({
-                    "message": "No accounts receivable found matching the criteria",
-                    "total_items": 0,
-                    "data": []
-                }), 200
-            break  # No more items to fetch
+#         # If no items found, return empty list
+#         if not result.get('itens'):
+#             if page == 1:  # First page empty
+#                 return jsonify({
+#                     "message": "No accounts receivable found matching the criteria",
+#                     "total_items": 0,
+#                     "data": []
+#                 }), 200
+#             break  # No more items to fetch
 
-        # Add items to our list
-        all_items.extend(result['itens'])
+#         # Add items to our list
+#         all_items.extend(result['itens'])
 
-        # Check if we need to fetch more pages
-        if len(result['itens']) < page_size:
-            break  # Last page
+#         # Check if we need to fetch more pages
+#         if len(result['itens']) < page_size:
+#             break  # Last page
 
-        page += 1
+#         page += 1
 
-    # Flatten and save all items
-    accounts = [etl.flatten_account_receivable(account) for account in all_items]
-    output_file = etl.save_accounts_receivable(accounts)
+#     # Flatten and save all items
+#     accounts = [etl.flatten_account_receivable(account) for account in all_items]
+#     output_file = etl.save_accounts_receivable(accounts)
     
-    return jsonify({
-        "message": "Accounts receivable data extracted successfully",
-        "total_items": len(accounts),
-        "output_file": str(output_file),
-    })
+#     return jsonify({
+#         "message": "Accounts receivable data extracted successfully",
+#         "total_items": len(accounts),
+#         "output_file": str(output_file),
+#     })
 
 @etl_bp.route('/categorias/<customer_id>', methods=['GET'])
 def get_all_categories(customer_id):
@@ -660,7 +660,6 @@ def search_accounts_receivable_with_parent_categories_optimized(customer_id):
             {'id': cat['id'], 'nome': cat['nome']} 
             for cat in categories_data 
             if cat.get('categoria_pai')
-            and cat['tipo'] == 'RECEITA'
         ]
 
     except Exception as e:
@@ -804,7 +803,6 @@ def search_accounts_payable_with_parent_categories_optimized(customer_id):
             {'id': cat['id'], 'nome': cat['nome']} 
             for cat in categories_data 
             if cat.get('categoria_pai')
-            and cat['tipo'] == 'DESPESA'  # Filtro alterado para DESPESA
         ]
     except Exception as e:
         print(f"Error loading categories: {e}")
