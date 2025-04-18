@@ -728,7 +728,12 @@ def search_accounts_receivable_with_parent_categories_optimized(customer_id):
                     attempts = 0  # Reset attempts after success
                         
                 except requests.exceptions.HTTPError as e:
-                    if e.response.status_code == 429:  # Too Many Requests
+                    if e.response.status_code == 400 and attempts == 0:
+                        # Primeiro erro 400, tentar mais uma vez
+                        print(f"Erro 400 encontrado, tentando novamente para categoria {category_id}")
+                        attempts += 1
+                        continue
+                    elif e.response.status_code == 429:  # Too Many Requests
                         delay_between_requests *= 2  # Exponential backoff
                         print(f"Rate limit hit, increasing delay to {delay_between_requests}s")
                     attempts += 1
@@ -737,6 +742,7 @@ def search_accounts_receivable_with_parent_categories_optimized(customer_id):
                     print(f"Error processing category {category_id}: {e}")
                     has_more = False
 
+    # Restante do código permanece igual...
     # 4. Processamento otimizado dos resultados
     if not all_items:
         return jsonify({
@@ -781,12 +787,12 @@ def search_accounts_receivable_with_parent_categories_optimized(customer_id):
             "error": "Failed to save results",
             "message": str(e)
         }), 500
-    
+
 
 @etl_bp.route('/contas-a-pagar-com-categorias/<customer_id>', methods=['GET'])
 def search_accounts_payable_with_parent_categories_optimized(customer_id):
     """Endpoint otimizado para buscar contas a pagar apenas de categorias pai."""
-    etl = AccountsPayableETL(customer_id)  # Usando a classe AccountsPayableETL
+    etl = AccountsPayableETL(customer_id)
     access_token = etl._get_token()
     
     if not access_token:
@@ -817,7 +823,7 @@ def search_accounts_payable_with_parent_categories_optimized(customer_id):
             "message": "Please fetch categories first using /categorias endpoint"
         }), 400
 
-    # 2. Configuração otimizada (igual ao anterior)
+    # 2. Configuração otimizada
     date_range = {
         "data_vencimento_de": "2023-01-01",
         "data_vencimento_ate": (datetime.now() + timedelta(days=5*365)).strftime("%Y-%m-%d")
@@ -869,7 +875,12 @@ def search_accounts_payable_with_parent_categories_optimized(customer_id):
                     attempts = 0
                         
                 except requests.exceptions.HTTPError as e:
-                    if e.response.status_code == 429:
+                    if e.response.status_code == 400 and attempts == 0:
+                        # Primeiro erro 400, tentar mais uma vez
+                        print(f"Erro 400 encontrado, tentando novamente para categoria {category_id}")
+                        attempts += 1
+                        continue
+                    elif e.response.status_code == 429:
                         delay_between_requests *= 2
                         print(f"Rate limit hit, increasing delay to {delay_between_requests}s")
                     attempts += 1
@@ -903,7 +914,7 @@ def search_accounts_payable_with_parent_categories_optimized(customer_id):
 
     # 5. Salvamento
     try:
-        output_file = etl.save_accounts_payable(accounts)  # Método específico para contas a pagar
+        output_file = etl.save_accounts_payable(accounts)
         return jsonify({
             "message": "Accounts payable with parent categories extracted successfully",
             "total_items": len(accounts),
