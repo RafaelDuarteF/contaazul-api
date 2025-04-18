@@ -678,9 +678,9 @@ def search_accounts_receivable_with_parent_categories_optimized(customer_id):
     # 2. Configuração otimizada
     date_range = {
         "data_vencimento_de": "2023-01-01",
-        "data_vencimento_ate": datetime.now().strftime("%Y-%m-%d")
+        "data_vencimento_ate": (datetime.now() + timedelta(days=5*365)).strftime("%Y-%m-%d")
     }
-    page_size = 400  # Máximo permitido pela API
+    page_size = 100  # Máximo permitido pela API
     retry_limit = 3
     delay_between_requests = 0.3  # 300ms entre requisições
 
@@ -820,9 +820,9 @@ def search_accounts_payable_with_parent_categories_optimized(customer_id):
     # 2. Configuração otimizada (igual ao anterior)
     date_range = {
         "data_vencimento_de": "2023-01-01",
-        "data_vencimento_ate": datetime.now().strftime("%Y-%m-%d")
+        "data_vencimento_ate": (datetime.now() + timedelta(days=5*365)).strftime("%Y-%m-%d")
     }
-    page_size = 400
+    page_size = 100
     retry_limit = 3
     delay_between_requests = 0.3
 
