@@ -54,30 +54,52 @@ class BaseETL:
         page: int = 0,
         page_size: int = 100,
         ascending_field: Optional[str] = None,
-        descending_field: Optional[str] = None
+        descending_field: Optional[str] = None,
+        max_retries: int = 1  # Adicionando parâmetro para controle de retentativas
     ) -> Optional[Dict]:
-        try:
-            params = {
-                "pagina": page,
-                "tamanho_pagina": page_size
-            }
-            
-            if ascending_field:
-                params["campo_ordenado_ascendente"] = ascending_field
-            if descending_field:
-                params["campo_ordenado_descendente"] = descending_field
-            
-            response = requests.post(
-                f"{self.base_url}{self.endpoint}/buscar",
-                headers=self._get_headers(access_token),
-                params=params,
-                json=filters
-            )
-            response.raise_for_status()
-            return response.json()
-        except requests.exceptions.RequestException as e:
-            print(f"Error searching items: {e}")
-            return None
+        params = {
+            "pagina": page,
+            "tamanho_pagina": page_size
+        }
+        
+        if ascending_field:
+            params["campo_ordenado_ascendente"] = ascending_field
+        if descending_field:
+            params["campo_ordenado_descendente"] = descending_field
+        
+        attempts = 0
+        last_exception = None
+        
+        while attempts <= max_retries:
+            try:
+                response = requests.post(
+                    f"{self.base_url}{self.endpoint}/buscar",
+                    headers=self._get_headers(access_token),
+                    params=params,
+                    json=filters
+                )
+                response.raise_for_status()
+                return response.json()
+                
+            except requests.exceptions.HTTPError as e:
+                last_exception = e
+                if e.response.status_code == 400 and attempts < max_retries:
+                    print(f"Erro 400 encontrado, tentando novamente (tentativa {attempts + 1})")
+                    attempts += 1
+                    time.sleep(0.3)  # Pequena pausa antes de tentar novamente
+                    continue
+                elif e.response.status_code == 429:
+                    print("Rate limit atingido, aguardando antes de tentar novamente")
+                    time.sleep(5)  # Pausa maior para rate limit
+                    continue
+                else:
+                    break
+            except requests.exceptions.RequestException as e:
+                last_exception = e
+                break
+        
+        print(f"Error searching items após {attempts} tentativas: {last_exception}")
+        return None
 
     def _get_categories_data(self) -> List[Dict]:
         folder = self._get_customer_folder()
@@ -178,14 +200,14 @@ class AccountsPayableETL(BaseETL):
         ascending_field: Optional[str] = None,
         descending_field: Optional[str] = None
     ) -> Optional[Dict]:
-        """Search accounts payable with filters."""
         return self._search_items(
             access_token,
             filters,
             page,
             page_size,
             ascending_field,
-            descending_field
+            descending_field,
+            max_retries=1  # Permitir 1 retentativa (total de 2 tentativas)
         )
 
     def save_accounts_payable(self, accounts: List[Dict]):
@@ -283,14 +305,14 @@ class AccountsReceivableETL(BaseETL):
         ascending_field: Optional[str] = None,
         descending_field: Optional[str] = None
     ) -> Optional[Dict]:
-        """Search accounts receivable with filters."""
         return self._search_items(
             access_token,
             filters,
             page,
             page_size,
             ascending_field,
-            descending_field
+            descending_field,
+            max_retries=1  # Permitir 1 retentativa (total de 2 tentativas)
         )
 
     def save_accounts_receivable(self, accounts: List[Dict]):
@@ -639,7 +661,6 @@ def get_all_categories(customer_id):
         "total_items": len(categories),
         "output_file": str(output_file),
     })
-
 @etl_bp.route('/contas-a-receber-com-categorias/<customer_id>', methods=['GET'])
 def search_accounts_receivable_with_parent_categories_optimized(customer_id):
     """Endpoint otimizado para buscar contas a receber apenas de categorias pai."""
@@ -728,12 +749,7 @@ def search_accounts_receivable_with_parent_categories_optimized(customer_id):
                     attempts = 0  # Reset attempts after success
                         
                 except requests.exceptions.HTTPError as e:
-                    if e.response.status_code == 400 and attempts == 0:
-                        # Primeiro erro 400, tentar mais uma vez
-                        print(f"Erro 400 encontrado, tentando novamente para categoria {category_id}")
-                        attempts += 1
-                        continue
-                    elif e.response.status_code == 429:  # Too Many Requests
+                    if e.response.status_code == 429:  # Too Many Requests
                         delay_between_requests *= 2  # Exponential backoff
                         print(f"Rate limit hit, increasing delay to {delay_between_requests}s")
                     attempts += 1
@@ -742,7 +758,6 @@ def search_accounts_receivable_with_parent_categories_optimized(customer_id):
                     print(f"Error processing category {category_id}: {e}")
                     has_more = False
 
-    # Restante do código permanece igual...
     # 4. Processamento otimizado dos resultados
     if not all_items:
         return jsonify({
@@ -787,12 +802,12 @@ def search_accounts_receivable_with_parent_categories_optimized(customer_id):
             "error": "Failed to save results",
             "message": str(e)
         }), 500
-
+    
 
 @etl_bp.route('/contas-a-pagar-com-categorias/<customer_id>', methods=['GET'])
 def search_accounts_payable_with_parent_categories_optimized(customer_id):
     """Endpoint otimizado para buscar contas a pagar apenas de categorias pai."""
-    etl = AccountsPayableETL(customer_id)
+    etl = AccountsPayableETL(customer_id)  # Usando a classe AccountsPayableETL
     access_token = etl._get_token()
     
     if not access_token:
@@ -823,7 +838,7 @@ def search_accounts_payable_with_parent_categories_optimized(customer_id):
             "message": "Please fetch categories first using /categorias endpoint"
         }), 400
 
-    # 2. Configuração otimizada
+    # 2. Configuração otimizada (igual ao anterior)
     date_range = {
         "data_vencimento_de": "2023-01-01",
         "data_vencimento_ate": (datetime.now() + timedelta(days=5*365)).strftime("%Y-%m-%d")
@@ -875,12 +890,7 @@ def search_accounts_payable_with_parent_categories_optimized(customer_id):
                     attempts = 0
                         
                 except requests.exceptions.HTTPError as e:
-                    if e.response.status_code == 400 and attempts == 0:
-                        # Primeiro erro 400, tentar mais uma vez
-                        print(f"Erro 400 encontrado, tentando novamente para categoria {category_id}")
-                        attempts += 1
-                        continue
-                    elif e.response.status_code == 429:
+                    if e.response.status_code == 429:
                         delay_between_requests *= 2
                         print(f"Rate limit hit, increasing delay to {delay_between_requests}s")
                     attempts += 1
@@ -914,7 +924,7 @@ def search_accounts_payable_with_parent_categories_optimized(customer_id):
 
     # 5. Salvamento
     try:
-        output_file = etl.save_accounts_payable(accounts)
+        output_file = etl.save_accounts_payable(accounts)  # Método específico para contas a pagar
         return jsonify({
             "message": "Accounts payable with parent categories extracted successfully",
             "total_items": len(accounts),
