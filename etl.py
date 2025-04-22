@@ -942,3 +942,106 @@ def search_accounts_payable_with_parent_categories_optimized(customer_id):
             "error": "Failed to save results",
             "message": str(e)
         }), 500
+
+
+@etl_bp.route('/contas-combinadas/<customer_id>', methods=['GET'])
+def get_combined_accounts(customer_id):
+    """Endpoint que combina contas a receber e a pagar com informações de categoria pai."""
+    try:
+        # 1. Carrega os dados existentes
+        folder = BaseETL(customer_id, "")._get_customer_folder()
+        if not folder:
+            return jsonify({
+                "error": "Customer folder not found",
+                "message": "Verify customer ID"
+            }), 404
+
+        data_path = Path(DATA_PATH) / folder
+        
+        # Carrega contas a receber
+        receivables_file = data_path / "accounts_receivable_data.json"
+        if not receivables_file.exists():
+            return jsonify({
+                "error": "Accounts receivable data not found",
+                "message": "Run /contas-a-receber-com-categorias first"
+            }), 404
+        
+        with open(receivables_file, 'r', encoding='utf-8') as f:
+            receivables = json.load(f)
+            for item in receivables:
+                item['tipo'] = 'R'  # RECEITA
+
+        # Carrega contas a pagar
+        payables_file = data_path / "accounts_payable_data.json"
+        if not payables_file.exists():
+            return jsonify({
+                "error": "Accounts payable data not found",
+                "message": "Run /contas-a-pagar-com-categorias first"
+            }), 404
+        
+        with open(payables_file, 'r', encoding='utf-8') as f:
+            payables = json.load(f)
+            for item in payables:
+                item['tipo'] = 'D'  # DESPESA
+
+        # 2. Carrega as categorias para mapeamento
+        categories_file = data_path / "categories_data.json"
+        if not categories_file.exists():
+            return jsonify({
+                "error": "Categories data not found",
+                "message": "Run /categorias first"
+            }), 404
+        
+        with open(categories_file, 'r', encoding='utf-8') as f:
+            categories = json.load(f)
+
+        # Cria mapeamento de categorias (id -> {dados})
+        category_map = {cat['id']: cat for cat in categories}
+
+        # 3. Processa as contas para adicionar informações de categoria pai
+        def process_account(account):
+            # Verifica se já tem categoria_principal_id (do endpoint anterior)
+            cat_id = account.get('categoria_principal_id')
+            if not cat_id:
+                return account  # Se não tiver categoria, mantém como está
+
+            # Se a categoria já for pai, usa ela mesma
+            category = category_map.get(cat_id, {})
+            if category.get('categoria_pai') is None:
+                account['categoria_pai_id'] = cat_id
+                account['categoria_pai_nome'] = category.get('nome', '')
+            else:
+                # Se não for pai, busca a categoria pai
+                parent_id = category.get('categoria_pai')
+                parent_category = category_map.get(parent_id, {})
+                account['categoria_pai_id'] = parent_id
+                account['categoria_pai_nome'] = parent_category.get('nome', '')
+            
+            return account
+
+        # Processa todas as contas
+        processed_receivables = [process_account(acc) for acc in receivables]
+        processed_payables = [process_account(acc) for acc in payables]
+
+        # 4. Combina as listas
+        combined_accounts = processed_receivables + processed_payables
+
+        # 5. Salva o resultado combinado
+        output_file = data_path / "combined_accounts_data.json"
+        with open(output_file, 'w', encoding='utf-8') as f:
+            json.dump(combined_accounts, f, ensure_ascii=False, indent=2)
+
+        return jsonify({
+            "message": "Accounts combined successfully",
+            "total_receivables": len(processed_receivables),
+            "total_payables": len(processed_payables),
+            "total_combined": len(combined_accounts),
+            "output_file": str(output_file)
+        })
+
+    except Exception as e:
+        print(f"Error combining accounts: {str(e)}")
+        return jsonify({
+            "error": "Failed to combine accounts",
+            "message": str(e)
+        }), 500
