@@ -464,7 +464,8 @@ class FinancialAccountsETL(BaseETL):
             response.raise_for_status()
             
             accounts = response.json()
-            print(accounts)
+            accounts = accounts.get("itens", accounts)  # Check if 'itens' key exists
+            
             if not accounts or not isinstance(accounts, list):
                 return None
                 
