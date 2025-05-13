@@ -463,7 +463,7 @@ class FinancialAccountsETL(BaseETL):
             )
             response.raise_for_status()
 
-            print(f("Response status code: {response.status_code}"))
+            print(f"Response status code: {response.status_code}")
             
             accounts = response.json()
             if not accounts or not isinstance(accounts, list):
