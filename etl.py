@@ -423,6 +423,148 @@ class SalesETL:
             json.dump(sales, f, ensure_ascii=False, indent=2)
         
         return filename
+    
+class FinancialAccountsETL(BaseETL):
+    def __init__(self, customer_id):
+        super().__init__(customer_id, "/conta-financeira")
+
+    def flatten_financial_account(self, account: Dict) -> Dict:
+        """Flatten the financial account data structure."""
+        return {
+            "id": account.get("id"),
+            "banco": account.get("banco"),
+            "codigo_banco": account.get("codigo_banco"),
+            "nome": account.get("nome"),
+            "ativo": account.get("ativo"),
+            "tipo": account.get("tipo"),
+            "conta_padrao": account.get("conta_padrao"),
+            "possui_config_boleto_bancario": account.get("possui_config_boleto_bancario"),
+            "agencia": account.get("agencia"),
+            "numero": account.get("numero"),
+            # These will be calculated later
+            "total_recebido": 0,
+            "total_a_receber": 0,
+            "total_pago": 0,
+            "total_a_pagar": 0,
+            "saldo_atual": 0
+        }
+
+    def fetch_all_financial_accounts(self, access_token: str) -> Optional[List[Dict]]:
+        """Fetch all financial accounts in a single request"""
+        try:
+            params = {
+                "tamanho_pagina": 1000,
+                "apenas_ativo": True
+            }
+            
+            response = requests.get(
+                f"{self.base_url}{self.endpoint}",
+                headers=self._get_headers(access_token),
+                params=params
+            )
+            response.raise_for_status()
+            
+            accounts = response.json()
+            if not accounts or not isinstance(accounts, list):
+                return None
+                
+            return [self.flatten_financial_account(acc) for acc in accounts]
+            
+        except requests.exceptions.RequestException as e:
+            print(f"Error fetching financial accounts: {e}")
+            return None
+
+    def calculate_account_totals(self, access_token: str, accounts: List[Dict]) -> List[Dict]:
+        """Calculate totals for each financial account by searching payable/receivable"""
+        date_range = {
+            "data_vencimento_de": "2020-01-01",  # Wide date range to get all transactions
+            "data_vencimento_ate": (datetime.now() + timedelta(days=365)).strftime("%Y-%m-%d")
+        }
+        page_size = 400
+        
+        for account in tqdm(accounts, desc="Calculating account totals"):
+            account_id = account["id"]
+            
+            # Calculate for accounts receivable
+            receivables = self._calculate_for_account_type(
+                access_token,
+                account_id,
+                "receivable",
+                date_range,
+                page_size
+            )
+            account["total_recebido"] = receivables.get("pago", 0)
+            account["total_a_receber"] = receivables.get("nao_pago", 0)
+            
+            # Calculate for accounts payable
+            payables = self._calculate_for_account_type(
+                access_token,
+                account_id,
+                "payable",
+                date_range,
+                page_size
+            )
+            account["total_pago"] = payables.get("pago", 0)
+            account["total_a_pagar"] = payables.get("nao_pago", 0)
+            
+            # Calculate current balance
+            account["saldo_atual"] = (
+                account["total_recebido"] - account["total_pago"] +
+                account["total_a_receber"] - account["total_a_pagar"]
+            )
+            
+        return accounts
+
+    def _calculate_for_account_type(self, access_token: str, account_id: str, 
+                                 account_type: str, date_range: Dict, page_size: int) -> Dict:
+        """Helper method to calculate totals for a specific account type"""
+        endpoint = "/financeiro/eventos-financeiros/contas-a-receber" if account_type == "receivable" \
+                  else "/financeiro/eventos-financeiros/contas-a-pagar"
+        
+        totals = {"pago": 0, "nao_pago": 0}
+        page = 1
+        
+        while True:
+            try:
+                response = requests.post(
+                    f"{self.base_url}{endpoint}/buscar",
+                    headers=self._get_headers(access_token),
+                    params={
+                        "pagina": page,
+                        "tamanho_pagina": page_size
+                    },
+                    json={
+                        **date_range,
+                        "ids_contas_financeiras": [account_id]
+                    }
+                )
+                response.raise_for_status()
+                
+                data = response.json()
+                if not data or not data.get("itens"):
+                    break
+                
+                for item in data["itens"]:
+                    if item.get("pago"):
+                        totals["pago"] += float(item["pago"])
+                    if item.get("nao_pago"):
+                        totals["nao_pago"] += float(item["nao_pago"])
+                
+                if len(data["itens"]) < page_size:
+                    break
+                    
+                page += 1
+                time.sleep(0.2)  # Small delay to avoid rate limiting
+                
+            except requests.exceptions.RequestException as e:
+                print(f"Error calculating {account_type} totals for account {account_id}: {e}")
+                break
+                
+        return totals
+
+    def save_financial_accounts(self, accounts: List[Dict]):
+        """Save financial accounts data to a JSON file."""
+        return self._save_items(accounts, "financial_accounts_data.json")
 
 
 @etl_bp.route('/extract_sales/<customer_id>')
@@ -661,6 +803,7 @@ def get_all_categories(customer_id):
         "total_items": len(categories),
         "output_file": str(output_file),
     })
+
 @etl_bp.route('/contas-a-receber-com-categorias/<customer_id>', methods=['GET'])
 def search_accounts_receivable_with_parent_categories_optimized(customer_id):
     """Endpoint otimizado para buscar contas a receber apenas de categorias pai."""
@@ -1045,3 +1188,37 @@ def get_combined_accounts(customer_id):
             "error": "Failed to combine accounts",
             "message": str(e)
         }), 500
+
+
+@etl_bp.route('/contas-financeiras/<customer_id>', methods=['GET'])
+def extract_financial_accounts(customer_id):
+    """Endpoint to fetch financial accounts with calculated totals."""
+    etl = FinancialAccountsETL(customer_id)
+    access_token = etl._get_token()
+    
+    if not access_token:
+        return jsonify({
+            "error": "No access token found",
+            "message": "Please authenticate first using /auth-new"
+        }), 401
+
+    # Fetch all financial accounts
+    accounts = etl.fetch_all_financial_accounts(access_token)
+    if not accounts:
+        return jsonify({
+            "error": "No financial accounts found",
+            "message": "Failed to fetch financial accounts"
+        }), 404
+
+    # Calculate totals for each account
+    accounts_with_totals = etl.calculate_account_totals(access_token, accounts)
+    
+    # Save the results
+    output_file = etl.save_financial_accounts(accounts_with_totals)
+    
+    return jsonify({
+        "message": "Financial accounts data extracted successfully",
+        "total_accounts": len(accounts_with_totals),
+        "output_file": str(output_file),
+        "sample_account": accounts_with_totals[0] if accounts_with_totals else None
+    })
