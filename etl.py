@@ -427,6 +427,10 @@ class SalesETL:
 class FinancialAccountsETL(BaseETL):
     def __init__(self, customer_id):
         super().__init__(customer_id, "/conta-financeira")
+        self.max_retries = 5  # Número máximo de tentativas
+        self.initial_delay = 1.0  # Delay inicial em segundos
+        self.max_delay = 60.0  # Delay máximo em segundos
+        self.backoff_factor = 2.0  # Fator de aumento do delay
 
     def flatten_financial_account(self, account: Dict) -> Dict:
         """Flatten the financial account data structure."""
@@ -441,69 +445,150 @@ class FinancialAccountsETL(BaseETL):
             "possui_config_boleto_bancario": account.get("possui_config_boleto_bancario"),
             "agencia": account.get("agencia"),
             "numero": account.get("numero"),
-            # These will be calculated later
             "total_recebido": 0,
             "total_a_receber": 0,
             "total_pago": 0,
             "total_a_pagar": 0,
-            "saldo_atual": 0
+            "saldo_atual": 0,
+            "last_updated": datetime.now().isoformat()  # Adiciona timestamp
         }
 
     def fetch_all_financial_accounts(self, access_token: str) -> Optional[List[Dict]]:
-        """Fetch all financial accounts in a single request"""
-        try:
-            params = {
-                "tamanho_pagina": 1000,
-            }
+        """Fetch all financial accounts with retry logic"""
+        folder = self._get_customer_folder()
+        if not folder:
+            return None
             
-            response = requests.get(
-                f"{self.base_url}{self.endpoint}",
-                headers=self._get_headers(access_token),
-                params=params
-            )
-            response.raise_for_status()
-            
-            accounts = response.json()
-            accounts = accounts.get("itens", accounts)  # Check if 'itens' key exists
-            
-            if not accounts or not isinstance(accounts, list):
+        # Verifica se já existe um arquivo de progresso
+        progress_file = Path(self.data_path) / folder / "financial_accounts_progress.json"
+        
+        # Tenta carregar progresso anterior
+        accounts = []
+        if progress_file.exists():
+            try:
+                with open(progress_file, 'r', encoding='utf-8') as f:
+                    progress_data = json.load(f)
+                    accounts = progress_data.get('accounts', [])
+            except Exception as e:
+                print(f"Error loading progress file: {e}")
+
+        if accounts:
+            print(f"Resuming from existing progress with {len(accounts)} accounts")
+        else:
+            print("Starting new financial accounts fetch")
+            accounts = self._fetch_fresh_accounts(access_token)
+            if accounts is None:
                 return None
                 
-            return [self.flatten_financial_account(acc) for acc in accounts]
+            # Salva o progresso inicial
+            self._save_progress(progress_file, accounts)
             
-        except requests.exceptions.RequestException as e:
-            print(f"Error fetching financial accounts: {e}")
-            return None
+        return accounts
+
+    def _fetch_fresh_accounts(self, access_token: str) -> Optional[List[Dict]]:
+        """Fetch fresh list of financial accounts"""
+        attempts = 0
+        last_exception = None
+        
+        while attempts < self.max_retries:
+            try:
+                params = {
+                    "tamanho_pagina": 1000,
+                    "apenas_ativo": True
+                }
+                
+                response = requests.get(
+                    f"{self.base_url}{self.endpoint}",
+                    headers=self._get_headers(access_token),
+                    params=params,
+                    timeout=30
+                )
+                response.raise_for_status()
+                
+                accounts = response.json()
+                accounts = accounts.get("itens", accounts)  # Check if 'itens' key exists
+                
+                if not accounts or not isinstance(accounts, list):
+                    return None
+                    
+                return [self.flatten_financial_account(acc) for acc in accounts]
+                
+            except requests.exceptions.HTTPError as e:
+                last_exception = e
+                if e.response.status_code == 429:
+                    delay = min(self.initial_delay * (self.backoff_factor ** attempts), self.max_delay)
+                    print(f"Rate limit hit, waiting {delay} seconds before retry (attempt {attempts + 1})")
+                    time.sleep(delay)
+                else:
+                    print(f"HTTP error fetching accounts: {e}")
+                    time.sleep(self.initial_delay)
+                attempts += 1
+            except requests.exceptions.RequestException as e:
+                last_exception = e
+                print(f"Request error fetching accounts: {e}")
+                time.sleep(self.initial_delay)
+                attempts += 1
+        
+        print(f"Failed to fetch financial accounts after {attempts} attempts: {last_exception}")
+        return None
+
+    def _save_progress(self, progress_file: Path, accounts: List[Dict], current_index: int = 0) -> None:
+        """Save current progress to file"""
+        try:
+            progress_data = {
+                "accounts": accounts,
+                "current_index": current_index,
+                "timestamp": datetime.now().isoformat()
+            }
+            with open(progress_file, 'w', encoding='utf-8') as f:
+                json.dump(progress_data, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(f"Error saving progress file: {e}")
 
     def calculate_account_totals(self, access_token: str, accounts: List[Dict]) -> List[Dict]:
-        """Calculate totals for each financial account by searching payable/receivable"""
+        """Calculate totals for each financial account with resilience"""
+        folder = self._get_customer_folder()
+        if not folder:
+            return accounts
+            
+        progress_file = Path(self.data_path) / folder / "financial_accounts_progress.json"
+        
+        # Tenta carregar progresso anterior
+        current_index = 0
+        if progress_file.exists():
+            try:
+                with open(progress_file, 'r', encoding='utf-8') as f:
+                    progress_data = json.load(f)
+                    current_index = progress_data.get('current_index', 0)
+                    print(f"Resuming calculation from index {current_index}")
+            except Exception as e:
+                print(f"Error loading progress file: {e}")
+
         date_range = {
-            "data_vencimento_de": "2020-01-01",  # Wide date range to get all transactions
+            "data_vencimento_de": "2020-01-01",
             "data_vencimento_ate": (datetime.now() + timedelta(days=365)).strftime("%Y-%m-%d")
         }
-        page_size = 400
         
-        for account in tqdm(accounts, desc="Calculating account totals"):
+        for i in tqdm(range(current_index, len(accounts)), desc="Calculating account totals", initial=current_index, total=len(accounts)):
+            account = accounts[i]
             account_id = account["id"]
             
             # Calculate for accounts receivable
-            receivables = self._calculate_for_account_type(
+            receivables = self._calculate_with_retry(
                 access_token,
                 account_id,
                 "receivable",
-                date_range,
-                page_size
+                date_range
             )
             account["total_recebido"] = receivables.get("pago", 0)
             account["total_a_receber"] = receivables.get("nao_pago", 0)
             
             # Calculate for accounts payable
-            payables = self._calculate_for_account_type(
+            payables = self._calculate_with_retry(
                 access_token,
                 account_id,
                 "payable",
-                date_range,
-                page_size
+                date_range
             )
             account["total_pago"] = payables.get("pago", 0)
             account["total_a_pagar"] = payables.get("nao_pago", 0)
@@ -514,16 +599,32 @@ class FinancialAccountsETL(BaseETL):
                 account["total_a_receber"] - account["total_a_pagar"]
             )
             
+            # Update progress every account
+            self._save_progress(progress_file, accounts, i + 1)
+            
+            # Small delay between accounts to avoid rate limiting
+            time.sleep(0.5)
+            
+        # Remove progress file when done
+        try:
+            if progress_file.exists():
+                progress_file.unlink()
+        except Exception as e:
+            print(f"Error removing progress file: {e}")
+            
         return accounts
 
-    def _calculate_for_account_type(self, access_token: str, account_id: str, 
-                                 account_type: str, date_range: Dict, page_size: int) -> Dict:
-        """Helper method to calculate totals for a specific account type"""
+    def _calculate_with_retry(self, access_token: str, account_id: str, 
+                            account_type: str, date_range: Dict) -> Dict:
+        """Calculate totals with retry logic"""
         endpoint = "/financeiro/eventos-financeiros/contas-a-receber" if account_type == "receivable" \
                   else "/financeiro/eventos-financeiros/contas-a-pagar"
         
         totals = {"pago": 0, "nao_pago": 0}
         page = 1
+        page_size = 400
+        attempts = 0
+        delay = self.initial_delay
         
         while True:
             try:
@@ -537,8 +638,13 @@ class FinancialAccountsETL(BaseETL):
                     json={
                         **date_range,
                         "ids_contas_financeiras": [account_id]
-                    }
+                    },
+                    timeout=30
                 )
+                
+                if response.status_code == 429:
+                    raise requests.exceptions.HTTPError("Rate limit exceeded", response=response)
+                    
                 response.raise_for_status()
                 
                 data = response.json()
@@ -555,10 +661,25 @@ class FinancialAccountsETL(BaseETL):
                     break
                     
                 page += 1
-                time.sleep(0.2)  # Small delay to avoid rate limiting
+                attempts = 0  # Reset attempts after successful page
+                delay = self.initial_delay
+                time.sleep(0.3)  # Small delay between pages
                 
+            except requests.exceptions.HTTPError as e:
+                if e.response.status_code == 429:
+                    print(f"Rate limit hit for account {account_id}, waiting {delay} seconds")
+                    time.sleep(delay)
+                    delay = min(delay * self.backoff_factor, self.max_delay)
+                    attempts += 1
+                    
+                    if attempts >= self.max_retries:
+                        print(f"Max retries reached for account {account_id}")
+                        break
+                else:
+                    print(f"HTTP error calculating {account_type} for account {account_id}: {e}")
+                    break
             except requests.exceptions.RequestException as e:
-                print(f"Error calculating {account_type} totals for account {account_id}: {e}")
+                print(f"Request error calculating {account_type} for account {account_id}: {e}")
                 break
                 
         return totals
@@ -566,7 +687,6 @@ class FinancialAccountsETL(BaseETL):
     def save_financial_accounts(self, accounts: List[Dict]):
         """Save financial accounts data to a JSON file."""
         return self._save_items(accounts, "financial_accounts_data.json")
-
 
 @etl_bp.route('/extract_sales/<customer_id>')
 def extract_sales(customer_id):
