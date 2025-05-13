@@ -454,7 +454,6 @@ class FinancialAccountsETL(BaseETL):
         try:
             params = {
                 "tamanho_pagina": 1000,
-                "apenas_ativo": True
             }
             
             response = requests.get(
