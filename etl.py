@@ -363,6 +363,8 @@ class SalesETL:
             if sale.get("payment", {}).get("installments") else ""
         )
         
+        financial_account = sale.get("payment", {}).get("financial_account") or {}
+        
         return {
             "id": sale.get("id"),
             "number": sale.get("number"),
@@ -378,8 +380,8 @@ class SalesETL:
             "discount_rate": sale.get("discount", {}) and sale["discount"].get("rate"),
             "payment_type": sale.get("payment", {}).get("type"),
             "payment_method": sale.get("payment", {}).get("method"),
-            "financial_account_id": sale.get("payment", {}).get("financial_account", {}).get("uuid"),
-            "financial_account_name": sale.get("payment", {}).get("financial_account", {}).get("name"),
+            "financial_account_id": financial_account.get("uuid"),
+            "financial_account_name": financial_account.get("name"),
             "notes": sale.get("notes"),
             "shipping_cost": sale.get("shipping_cost"),
             "total": sale.get("total"),
