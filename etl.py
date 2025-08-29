@@ -385,8 +385,8 @@ class SalesETL:
             "notes": sale.get("notes"),
             "shipping_cost": sale.get("shipping_cost"),
             "total": sale.get("total"),
-            "seller_id": sale.get("seller", {}).get("id"),
-            "seller_name": sale.get("seller", {}).get("name"),
+            "seller_id": (sale.get("seller") or {}).get("id"),
+            "seller_name": (sale.get("seller") or {}).get("name"),
             "installments_count": len(sale.get("payment", {}).get("installments", [])),
         }
 
