@@ -32,16 +32,18 @@ app.register_blueprint(token_new_bp)
 @app.route('/generate-customers-json', methods=['GET'])
 def generate_customers_json():
     tokens = get_all_tokens()
-    customers = {}
+    users = []
+    seen = set()
     for t in tokens:
-        customers[t['customer_id']] = t['customer_folder']
-    customers_list = [
-        {'customer_id': cid, 'customer_folder': folder}
-        for cid, folder in customers.items()
-    ]
+        cid = t['customer_id']
+        folder = t['customer_folder']
+        if cid not in seen:
+            users.append({'id': cid, 'folder': folder})
+            seen.add(cid)
+    customers_json = {'users': users}
     with open('customers.json', 'w', encoding='utf-8') as f:
-        json.dump(customers_list, f, ensure_ascii=False, indent=2)
-    return jsonify({'status': 'ok', 'count': len(customers_list)})
+        json.dump(customers_json, f, ensure_ascii=False, indent=2)
+    return jsonify({'status': 'ok', 'count': len(users)})
 
 if __name__ == "__main__":
     # Only for local development
