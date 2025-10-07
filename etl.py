@@ -6,6 +6,7 @@ import time
 import requests
 from flask import Blueprint, jsonify, request
 from tqdm import tqdm
+from flask import current_app
 
 from config import DATA_PATH, TOKEN_FILE
 
@@ -689,6 +690,84 @@ class FinancialAccountsETL(BaseETL):
     def save_financial_accounts(self, accounts: List[Dict]):
         """Save financial accounts data to a JSON file."""
         return self._save_items(accounts, "financial_accounts_data.json")
+
+
+    # Novo endpoint para buscar parcelas dos eventos
+    @etl_bp.route('/parcelas/<customer_id>', methods=['GET'])
+    def get_event_installments(customer_id):
+        """Endpoint para buscar parcelas dos eventos de contas a receber e a pagar."""
+        # Busca pasta do cliente
+        folder = BaseETL(customer_id, "")._get_customer_folder()
+        if not folder:
+            return jsonify({"error": "Customer folder not found"}), 404
+
+        data_path = Path(DATA_PATH) / folder
+        # Carrega eventos
+        receivables_file = data_path / "accounts_receivable_data.json"
+        payables_file = data_path / "accounts_payable_data.json"
+        eventos = []
+        if receivables_file.exists():
+            with open(receivables_file, 'r', encoding='utf-8') as f:
+                eventos += json.load(f)
+        if payables_file.exists():
+            with open(payables_file, 'r', encoding='utf-8') as f:
+                eventos += json.load(f)
+        if not eventos:
+            return jsonify({"error": "No events found"}), 404
+
+        # Busca token
+        etl = BaseETL(customer_id, "")
+        access_token = etl._get_token()
+        if not access_token:
+            return jsonify({"error": "No access token found"}), 401
+
+        parcelas_result = []
+        for evento in tqdm(eventos, desc="Buscando parcelas"):
+            evento_id = evento.get("id")
+            if not evento_id:
+                continue
+            # Chama API de parcelas
+            url = f"https://api-v2.contaazul.com/v1/financeiro/eventos-financeiros/{evento_id}/parcelas"
+            try:
+                resp = requests.get(url, headers=etl._get_headers(access_token), timeout=30)
+                resp.raise_for_status()
+                parcelas = resp.json()
+            except Exception as e:
+                print(f"Erro buscando parcelas do evento {evento_id}: {e}")
+                continue
+            # Para cada parcela, aninha dados principais do evento
+            for parcela in parcelas:
+                parcela_flat = {
+                    "evento_id": evento_id,
+                    "evento_tipo": evento.get("tipo", ""),
+                    "evento_descricao": evento.get("descricao", ""),
+                    "evento_valor": evento.get("total", evento.get("valor", "")),
+                    "evento_status": evento.get("status", ""),
+                    # Dados principais da parcela
+                    "parcela_id": parcela.get("id"),
+                    "parcela_status": parcela.get("status"),
+                    "parcela_valor_pago": parcela.get("valor_pago"),
+                    "parcela_nao_pago": parcela.get("nao_pago"),
+                    "parcela_data_vencimento": parcela.get("data_vencimento"),
+                    "parcela_data_pagamento_previsto": parcela.get("data_pagamento_previsto"),
+                    "parcela_descricao": parcela.get("descricao"),
+                    "parcela_nota": parcela.get("nota"),
+                    "parcela_metodo_pagamento": parcela.get("metodo_pagamento"),
+                    "parcela_conciliado": parcela.get("conciliado"),
+                    "parcela_conta_financeira_id": parcela.get("id_conta_financeira"),
+                }
+                parcelas_result.append(parcela_flat)
+
+        # Salva resultado
+        output_file = data_path / "parcelas_data.json"
+        with open(output_file, 'w', encoding='utf-8') as f:
+            json.dump(parcelas_result, f, ensure_ascii=False, indent=2)
+
+        return jsonify({
+            "message": "Parcelas extraídas com sucesso",
+            "total_parcelas": len(parcelas_result),
+            "output_file": str(output_file)
+        })
 
 @etl_bp.route('/extract_sales/<customer_id>')
 def extract_sales(customer_id):
