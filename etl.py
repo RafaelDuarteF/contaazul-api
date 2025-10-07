@@ -728,12 +728,32 @@ class FinancialAccountsETL(BaseETL):
                 continue
             # Chama API de parcelas
             url = f"https://api-v2.contaazul.com/v1/financeiro/eventos-financeiros/{evento_id}/parcelas"
-            try:
-                resp = requests.get(url, headers=etl._get_headers(access_token), timeout=30)
-                resp.raise_for_status()
-                parcelas = resp.json()
-            except Exception as e:
-                print(f"Erro buscando parcelas do evento {evento_id}: {e}")
+            max_attempts = 3
+            attempt = 0
+            while attempt < max_attempts:
+                try:
+                    resp = requests.get(url, headers=etl._get_headers(access_token), timeout=30)
+                    if resp.status_code == 429:
+                        print(f"Rate limit 429 para evento {evento_id}, aguardando 30s antes de tentar novamente...")
+                        time.sleep(30)
+                        attempt += 1
+                        continue
+                    resp.raise_for_status()
+                    parcelas = resp.json()
+                    break
+                except requests.exceptions.HTTPError as e:
+                    if resp.status_code == 429:
+                        print(f"Rate limit 429 para evento {evento_id}, aguardando 30s antes de tentar novamente...")
+                        time.sleep(30)
+                        attempt += 1
+                        continue
+                    print(f"Erro buscando parcelas do evento {evento_id}: {e}")
+                    break
+                except Exception as e:
+                    print(f"Erro buscando parcelas do evento {evento_id}: {e}")
+                    break
+            else:
+                print(f"Falha ao buscar parcelas do evento {evento_id} após {max_attempts} tentativas.")
                 continue
             # Para cada parcela, aninha dados principais do evento
             for parcela in parcelas:
