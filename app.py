@@ -45,6 +45,43 @@ def generate_customers_json():
         json.dump(customers_json, f, ensure_ascii=False, indent=2)
     return jsonify({'status': 'ok', 'count': len(users)})
 
+
+
+@app.route('/test-bigquery')
+def test_bigquery():
+    """Test BigQuery connection"""
+    try:
+        from google.cloud import bigquery
+        from google.oauth2 import service_account
+        import json
+        import os
+        
+        credentials_json = os.getenv('GOOGLE_APPLICATION_CREDENTIALS_JSON')
+        if not credentials_json:
+            return jsonify({"error": "Variável GOOGLE_APPLICATION_CREDENTIALS_JSON não encontrada"})
+        
+        try:
+            credentials_info = json.loads(credentials_json)
+            credentials = service_account.Credentials.from_service_account_info(credentials_info)
+            client = bigquery.Client(credentials=credentials, project=credentials_info['project_id'])
+        except json.JSONDecodeError as e:
+            return jsonify({"error": "JSON inválido", "message": str(e)})
+        
+        # Testa listando datasets
+        datasets = list(client.list_datasets())
+        
+        return jsonify({
+            "status": "✅ Conexão com BigQuery estabelecida!",
+            "project": credentials_info['project_id'],
+            "datasets": [dataset.dataset_id for dataset in datasets]
+        })
+        
+    except Exception as e:
+        return jsonify({
+            "error": "❌ Falha na conexão",
+            "message": str(e)
+        })
+
 if __name__ == "__main__":
     # Only for local development
     app.run(port=8000, debug=True)

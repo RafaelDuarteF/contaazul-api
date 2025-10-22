@@ -1,0 +1,20 @@
+{
+  "users": [
+    {
+      "id": "assessoriaContabil",
+      "folder": "assessoriaContabil"
+    },
+    {
+      "id": "taila",
+      "folder": "taila"
+    },
+    {
+      "id": "studio61",
+      "folder": "studio61"
+    },
+    {
+      "id": "coffejones",
+      "folder": "coffejones"
+    }
+  ]
+}

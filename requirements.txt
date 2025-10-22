@@ -5,3 +5,8 @@ tqdm
 gunicorn
 werkzeug
 mysql-connector-python
+pyarrow
+pandas
+google-cloud-bigquery
+db-dtypes
+pandas-gbq
