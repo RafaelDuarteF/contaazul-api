@@ -19,16 +19,20 @@ etl_bp = Blueprint('etl', __name__)
 
 # BigQuery client setup
 def get_bigquery_client():
-    """Initialize BigQuery client with credentials"""
+    """Initialize BigQuery client with credentials from first row in MySQL credencial_google"""
     try:
-        # Para Render - usa variável de ambiente com service account key
-        if os.getenv('GOOGLE_APPLICATION_CREDENTIALS_JSON'):
-            credentials_info = json.loads(os.getenv('GOOGLE_APPLICATION_CREDENTIALS_JSON'))
+        conn = _connect()
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute("SELECT credencial FROM credencial_google LIMIT 1")
+        row = cursor.fetchone()
+        cursor.close()
+        conn.close()
+        if row and row.get("credencial"):
+            credentials_info = json.loads(row["credencial"])
             credentials = service_account.Credentials.from_service_account_info(credentials_info)
             return bigquery.Client(credentials=credentials)
-        else:
-            # Para desenvolvimento local
-            return bigquery.Client()
+        print("No credentials found in MySQL credencial_google table.")
+        return None
     except Exception as e:
         print(f"Error initializing BigQuery client: {e}")
         return None
