@@ -46,7 +46,8 @@ BQ_TABLES = {
     "parcelas_baixas": "parcelas_baixas",
     "sales": "sales",
     "financial_accounts": "financial_accounts",
-    "sync_logs": "sync_logs"
+    "sync_logs": "sync_logs",
+    "combined_accounts": "combined_accounts"
 }
 
 class BigQueryStorage:
@@ -235,6 +236,19 @@ class BigQueryStorage:
             return len(errors) == 0
         except Exception as e:
             print(f"Error saving sync log: {e}")
+            return False
+        
+    def delete_all_data(self, table_name):
+        """Deleta todos os dados de uma tabela"""
+        try:
+            query_job = self.client.query(f"DELETE FROM `{self.dataset}.{table_name}` WHERE TRUE")
+            query_job.result()  # Aguarda a conclusão
+            
+            print(f"Todos os dados da tabela {table_name} foram excluídos com sucesso")
+            return True
+            
+        except Exception as e:
+            print(f"Erro ao excluir dados da tabela {table_name}: {e}")
             return False
 
 class BaseETL:
@@ -1054,10 +1068,6 @@ def search_accounts_receivable_with_parent_categories_optimized(customer_id):
             "message": "Please authenticate first using /auth-new"
         }), 401
 
-    last_sync = etl._normalize_last_sync(
-        etl.bq_storage.get_last_sync(BQ_TABLES["accounts_receivable"])
-    )
-
     # 1. Busca categorias pai de forma mais eficiente
     parent_categories = []
     try:
@@ -1123,8 +1133,7 @@ def search_accounts_receivable_with_parent_categories_optimized(customer_id):
                         item['categoria_principal_id'] = category_id
                         item['categoria_principal_nome'] = category['nome']
                         total_examined += 1
-                        if etl._was_updated_after_sync(item, last_sync):
-                            updated_items.append(item)
+                        updated_items.append(item)  # Adiciona todos os itens sem verificar sincronização
                     
                     # Verifica se há mais páginas
                     if len(result['itens']) < page_size:
@@ -1146,11 +1155,9 @@ def search_accounts_receivable_with_parent_categories_optimized(customer_id):
 
     # 4. Processamento otimizado dos resultados
     if not updated_items:
-        etl.bq_storage.save_sync_log(BQ_TABLES["accounts_receivable"], 0)
         return jsonify({
-            "message": "Nenhuma conta a receber atualizada desde o último sync",
+            "message": "Nenhuma conta a receber encontrada",
             "total_items": 0,
-            "last_sync": last_sync.isoformat() if last_sync else None,
             "examined": total_examined
         }), 200
 
@@ -1170,20 +1177,27 @@ def search_accounts_receivable_with_parent_categories_optimized(customer_id):
         except Exception as e:
             print(f"Error processing account {item_id}: {e}")
 
-    # 5. Salvamento de todos os registros de uma vez só
+    # 5. Exclui todos os dados existentes e salva os novos
     if not accounts:
         return jsonify({"message": "No accounts to save", "total_saved": 0}), 200
 
+    # Exclui todos os dados da tabela antes de salvar, coloca o dataset do cliente
+    try:
+        etl.bq_storage.delete_all_data(BQ_TABLES["accounts_receivable"])
+    except Exception as e:
+        print(f"Erro ao excluir dados existentes: {e}")
+        return jsonify({"error": "Error deleting existing data from BigQuery"}), 500
+
+    # Salva os novos dados
     ok = etl.bq_storage.save_data(BQ_TABLES["accounts_receivable"], accounts, "id")
     total_saved = len(accounts) if ok else 0
 
     if total_saved > 0:
         etl.bq_storage.save_sync_log(BQ_TABLES["accounts_receivable"], total_saved)
         return jsonify({
-            "message": "Accounts receivable with parent categories extracted successfully",
+            "message": "Accounts receivable with parent categories extracted and replaced successfully",
             "total_items": total_saved,
             "parent_categories_processed": len(parent_categories),
-            "processed_since": last_sync.isoformat() if last_sync else None,
             "examined": total_examined
         })
     else:
@@ -1200,10 +1214,6 @@ def search_accounts_payable_with_parent_categories_optimized(customer_id):
             "error": "No access token found",
             "message": "Please authenticate first using /auth-new"
         }), 401
-
-    last_sync = etl._normalize_last_sync(
-        etl.bq_storage.get_last_sync(BQ_TABLES["accounts_payable"])
-    )
 
     # 1. Busca categorias pai de DESPESA de forma mais eficiente
     parent_categories = []
@@ -1268,8 +1278,7 @@ def search_accounts_payable_with_parent_categories_optimized(customer_id):
                         item['categoria_principal_id'] = category_id
                         item['categoria_principal_nome'] = category['nome']
                         total_examined += 1
-                        if etl._was_updated_after_sync(item, last_sync):
-                            updated_items.append(item)
+                        updated_items.append(item)  # Adiciona todos os itens sem verificar sincronização
                     
                     if len(result['itens']) < page_size:
                         has_more = False
@@ -1290,11 +1299,9 @@ def search_accounts_payable_with_parent_categories_optimized(customer_id):
 
     # 4. Processamento dos resultados
     if not updated_items:
-        etl.bq_storage.save_sync_log(BQ_TABLES["accounts_payable"], 0)
         return jsonify({
-            "message": "Nenhuma conta a pagar atualizada desde o último sync",
+            "message": "Nenhuma conta a pagar encontrada",
             "total_items": 0,
-            "last_sync": last_sync.isoformat() if last_sync else None,
             "examined": total_examined
         }), 200
 
@@ -1312,20 +1319,28 @@ def search_accounts_payable_with_parent_categories_optimized(customer_id):
         except Exception as e:
             print(f"Error processing account {item_id}: {e}")
 
-    # 5. Salvamento de todos os registros de uma vez só
+    # 5. Exclui todos os dados existentes e salva os novos
     if not accounts:
         return jsonify({"message": "No accounts to save", "total_saved": 0}), 200
 
+    # Exclui todos os dados da tabela antes de salvar
+    try:
+        etl.bq_storage.delete_all_data(BQ_TABLES["accounts_payable"])
+        print(f"Todos os dados anteriores da tabela {BQ_TABLES['accounts_payable']} foram excluídos")
+    except Exception as e:
+        print(f"Erro ao excluir dados existentes: {e}")
+        return jsonify({"error": "Error deleting existing data from BigQuery"}), 500
+
+    # Salva os novos dados
     ok = etl.bq_storage.save_data(BQ_TABLES["accounts_payable"], accounts, "id")
     total_saved = len(accounts) if ok else 0
 
     if total_saved > 0:
         etl.bq_storage.save_sync_log(BQ_TABLES["accounts_payable"], total_saved)
         return jsonify({
-            "message": "Accounts payable with parent categories extracted successfully",
+            "message": "Accounts payable with parent categories extracted and replaced successfully",
             "total_items": total_saved,
             "parent_categories_processed": len(parent_categories),
-            "processed_since": last_sync.isoformat() if last_sync else None,
             "examined": total_examined
         })
     else:
@@ -1628,12 +1643,20 @@ def get_combined_accounts(customer_id):
         # Combina as listas
         combined_accounts = processed_receivables + processed_payables
 
+        # Exclui todos os dados existentes da tabela combined_accounts
+        try:
+            bq_storage.delete_all_data(BQ_TABLES["combined_accounts"])
+            print("Todos os dados anteriores da tabela combined_accounts foram excluídos")
+        except Exception as e:
+            print(f"Erro ao excluir dados existentes: {e}")
+            return jsonify({"error": "Error deleting existing data from combined_accounts table"}), 500
+
         # Salva no BigQuery
         success = bq_storage.save_data("combined_accounts", combined_accounts, "id")
         
         if success:
             return jsonify({
-                "message": "Accounts combined successfully",
+                "message": "Accounts combined and replaced successfully",
                 "total_receivables": len(processed_receivables),
                 "total_payables": len(processed_payables),
                 "total_combined": len(combined_accounts)
@@ -1865,3 +1888,4 @@ def sincroniza_parcelas_faltantes(customer_id):
         "baixas_criadas": total_baixas,
         "erros": erros
     })
+
