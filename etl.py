@@ -40,6 +40,9 @@ def get_bigquery_client():
 # BigQuery table names (agora cada cliente tem seu próprio dataset)
 BQ_TABLES = {
     "categories": "categories",
+    "dre_items": "dre_items",
+    "dre_subitems": "dre_subitems",
+    "dre_financial_categories": "dre_financial_categories",
     "accounts_receivable": "accounts_receivable", 
     "accounts_payable": "accounts_payable",
     "parcelas": "parcelas",
@@ -550,6 +553,125 @@ class CategoriesETL(BaseETL):
     def save_categories(self, categories: List[Dict]):
         return self._save_to_bigquery(BQ_TABLES["categories"], categories, "id")
 
+class DRECategoriesETL(BaseETL):
+    def __init__(self, customer_id):
+        super().__init__(customer_id, "/financeiro/categorias-dre")
+
+    def fetch_dre_categories(self, access_token: str) -> Optional[List[Dict]]:
+        try:
+            response = requests.get(
+                f"{self.base_url}{self.endpoint}",
+                headers=self._get_headers(access_token),
+                timeout=60
+            )
+            response.raise_for_status()
+            payload = response.json()
+            if isinstance(payload, dict):
+                return payload.get("itens", [])
+            if isinstance(payload, list):
+                return payload
+            return []
+        except requests.exceptions.RequestException as exc:
+            print(f"Error fetching DRE categories: {exc}")
+            return None
+
+    def transform_dre_categories(self, items: List[Dict]):
+        loaded_at = datetime.now(self.timezone).replace(microsecond=0).isoformat()
+        item_rows: List[Dict] = []
+        subitem_rows: List[Dict] = []
+        financial_rows: List[Dict] = []
+
+        for item in items or []:
+            if not isinstance(item, dict):
+                continue
+
+            item_id_raw = item.get("id")
+            if not item_id_raw:
+                continue
+            item_id = str(item_id_raw)
+
+            item_rows.append({
+                "id": item_id,
+                "descricao": item.get("descricao"),
+                "codigo": item.get("codigo"),
+                "posicao": item.get("posicao"),
+                "indica_totalizador": item.get("indica_totalizador"),
+                "representa_soma_custo_medio": item.get("representa_soma_custo_medio"),
+                "tem_subitens": bool(item.get("subitens")),
+                "tem_categorias_financeiras": bool(item.get("categorias_financeiras")),
+                "_loaded_at": loaded_at
+            })
+
+            for categoria in item.get("categorias_financeiras") or []:
+                if not isinstance(categoria, dict):
+                    continue
+                categoria_id_raw = categoria.get("id")
+                if not categoria_id_raw:
+                    continue
+                categoria_id = str(categoria_id_raw)
+                financial_rows.append({
+                    "record_id": f"item-{item_id}-{categoria_id}",
+                    "categoria_id": categoria_id,
+                    "codigo": categoria.get("codigo"),
+                    "nome": categoria.get("nome"),
+                    "ativo": categoria.get("ativo"),
+                    "origem_tipo": "item",
+                    "origem_id": item_id,
+                    "origem_item_id": item_id,
+                    "_loaded_at": loaded_at
+                })
+
+            for subitem in item.get("subitens") or []:
+                if not isinstance(subitem, dict):
+                    continue
+
+                subitem_id_raw = subitem.get("id")
+                if not subitem_id_raw:
+                    continue
+                subitem_id = str(subitem_id_raw)
+
+                subitem_rows.append({
+                    "id": subitem_id,
+                    "descricao": subitem.get("descricao"),
+                    "codigo": subitem.get("codigo"),
+                    "posicao": subitem.get("posicao"),
+                    "indica_totalizador": subitem.get("indica_totalizador"),
+                    "representa_soma_custo_medio": subitem.get("representa_soma_custo_medio"),
+                    "parent_item_id": item_id,
+                    "tem_categorias_financeiras": bool(subitem.get("categorias_financeiras")),
+                    "_loaded_at": loaded_at
+                })
+
+                for categoria in subitem.get("categorias_financeiras") or []:
+                    if not isinstance(categoria, dict):
+                        continue
+                    categoria_id_raw = categoria.get("id")
+                    if not categoria_id_raw:
+                        continue
+                    categoria_id = str(categoria_id_raw)
+                    financial_rows.append({
+                        "record_id": f"subitem-{subitem_id}-{categoria_id}",
+                        "categoria_id": categoria_id,
+                        "codigo": categoria.get("codigo"),
+                        "nome": categoria.get("nome"),
+                        "ativo": categoria.get("ativo"),
+                        "origem_tipo": "subitem",
+                        "origem_id": subitem_id,
+                        "origem_item_id": item_id,
+                        "_loaded_at": loaded_at
+                    })
+
+        return item_rows, subitem_rows, financial_rows
+
+    def save_items(self, items: List[Dict]):
+        return self._save_to_bigquery(BQ_TABLES["dre_items"], items, "id")
+
+    def save_subitems(self, subitems: List[Dict]):
+        return self._save_to_bigquery(BQ_TABLES["dre_subitems"], subitems, "id")
+
+    def save_financial_categories(self, financial_categories: List[Dict]):
+        return self._save_to_bigquery(BQ_TABLES["dre_financial_categories"], financial_categories, "record_id")
+
 class AccountsReceivableETL(BaseETL):
     def __init__(self, customer_id):
         super().__init__(customer_id, "/financeiro/eventos-financeiros/contas-a-receber")
@@ -1055,6 +1177,70 @@ def get_all_categories(customer_id):
         })
     else:
         return jsonify({"error": "Error saving categories to BigQuery"}), 500
+
+@etl_bp.route('/categorias-dre/<customer_id>', methods=['GET'])
+def extract_dre_categories(customer_id):
+    """Fetch DRE categories and split data into items, subitems and financial categories."""
+    etl = DRECategoriesETL(customer_id)
+    access_token = etl._get_token()
+
+    if not access_token:
+        return jsonify({
+            "error": "No access token found",
+            "message": "Please authenticate first using /auth-new"
+        }), 401
+
+    raw_items = etl.fetch_dre_categories(access_token)
+    if raw_items is None:
+        return jsonify({
+            "error": "Failed to fetch DRE categories",
+            "message": "See server logs for details"
+        }), 500
+
+    items, subitems, financial_categories = etl.transform_dre_categories(raw_items)
+
+    storage = etl.bq_storage
+    if not storage._ensure_dataset_exists():
+        return jsonify({
+            "error": "Failed to ensure BigQuery dataset",
+            "message": "Check BigQuery credentials configuration"
+        }), 500
+
+    for table_key in ("dre_items", "dre_subitems", "dre_financial_categories"):
+        table_name = BQ_TABLES[table_key]
+        try:
+            storage.delete_all_data(table_name)
+        except Exception as exc:
+            print(f"Error clearing table {table_name}: {exc}")
+
+    save_failures = []
+    counts = {}
+
+    counts["items"] = len(items)
+    if items and not etl.save_items(items):
+        save_failures.append("items")
+
+    counts["subitems"] = len(subitems)
+    if subitems and not etl.save_subitems(subitems):
+        save_failures.append("subitems")
+
+    counts["financial_categories"] = len(financial_categories)
+    if financial_categories and not etl.save_financial_categories(financial_categories):
+        save_failures.append("financial_categories")
+
+    if save_failures:
+        return jsonify({
+            "error": "Failed to persist some DRE datasets",
+            "failed_sections": save_failures,
+            "saved_counts": counts
+        }), 500
+
+    return jsonify({
+        "message": "DRE categories extracted successfully",
+        "items_rows": counts["items"],
+        "subitems_rows": counts["subitems"],
+        "financial_categories_rows": counts["financial_categories"]
+    })
 
 @etl_bp.route('/contas-a-receber-com-categorias/<customer_id>', methods=['GET'])
 def search_accounts_receivable_with_parent_categories_optimized(customer_id):
