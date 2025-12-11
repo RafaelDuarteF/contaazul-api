@@ -43,6 +43,8 @@ BQ_TABLES = {
     "dre_items": "dre_items",
     "dre_subitems": "dre_subitems",
     "dre_financial_categories": "dre_financial_categories",
+    "vendas_v2": "vendas_v2",
+    "clientes": "clientes",
     "accounts_receivable": "accounts_receivable", 
     "accounts_payable": "accounts_payable",
     "parcelas": "parcelas",
@@ -793,6 +795,125 @@ class SalesETL:
     def save_sales(self, sales: List[Dict]):
         return self.bq_storage.save_data(BQ_TABLES["sales"], sales, "id")
 
+
+class SalesV2ETL(BaseETL):
+    """ETL para vendas da API v2 (/venda/busca) gravando em vendas_v2."""
+
+    def __init__(self, customer_id):
+        super().__init__(customer_id, "/venda/busca")
+
+    def _flatten_sale_v2(self, sale: Dict) -> Dict:
+        cliente = sale.get("cliente") or {}
+        situacao = sale.get("situacao") or {}
+        status_email = sale.get("status_email") or {}
+
+        return {
+            "id": sale.get("id"),
+            "total": sale.get("total"),
+            "id_legado": sale.get("id_legado"),
+            "data": sale.get("data"),
+            "criado_em": sale.get("criado_em"),
+            "data_alteracao": sale.get("data_alteracao"),
+            "tipo": sale.get("tipo"),
+            "itens_tipo": sale.get("itens"),
+            "condicao_pagamento": sale.get("condicao_pagamento"),
+            "numero": sale.get("numero"),
+
+            # Cliente (flatten)
+            "cliente_id": cliente.get("id"),
+            "cliente_nome": cliente.get("nome"),
+            "cliente_email": cliente.get("email"),
+            "cliente_telefone": cliente.get("telefone"),
+            "cliente_endereco": cliente.get("endereco"),
+            "cliente_cidade": cliente.get("cidade"),
+            "cliente_estado": cliente.get("estado"),
+            "cliente_pais": cliente.get("pais"),
+            "cliente_cep": cliente.get("cep"),
+
+            # Situação (flatten)
+            "situacao_nome": situacao.get("nome"),
+            "situacao_descricao": situacao.get("descricao"),
+
+            # Status email (flatten)
+            "status_email_status": status_email.get("status"),
+            "status_email_enviado_em": status_email.get("enviado_em"),
+        }
+
+    def fetch_sales_page(self, access_token: str, params: Dict) -> Optional[Dict]:
+        """Busca uma página de vendas v2 na API."""
+        try:
+            response = requests.get(
+                f"{self.base_url}/venda/busca",
+                headers=self._get_headers(access_token),
+                params=params,
+                timeout=60,
+            )
+            response.raise_for_status()
+            return response.json()
+        except requests.exceptions.RequestException as exc:
+            print(f"Error fetching sales v2: {exc}")
+            return None
+
+    def save_vendas_v2(self, vendas: List[Dict]):
+        return self._save_to_bigquery(BQ_TABLES["vendas_v2"], vendas, "id")
+
+
+class ContractsETL(BaseETL):
+    """ETL para contratos (/contratos) gravando em tabela 'clientes'."""
+
+    def __init__(self, customer_id):
+        super().__init__(customer_id, "/contratos")
+
+    def _flatten_contract(self, contract: Dict) -> Dict:
+        cliente = contract.get("cliente") or {}
+
+        return {
+            "id": contract.get("id"),
+            "cliente_id": cliente.get("id"),
+            "cliente_nome": cliente.get("nome"),
+            "status": contract.get("status"),
+            "proximo_vencimento": contract.get("proximo_vencimento"),
+            "data_inicio": contract.get("data_inicio"),
+            "numero": contract.get("numero"),
+        }
+
+    def fetch_contracts_page(self, access_token: str, params: Dict) -> Optional[Dict]:
+        """Busca uma página de contratos na API v2."""
+        # Garante que data_inicio e data_fim sempre sejam enviados na query
+        if not params.get("data_inicio"):
+            params["data_inicio"] = "2000-01-01"
+        if not params.get("data_fim"):
+            future_date = (datetime.now() + timedelta(days=365 * 5)).strftime("%Y-%m-%d")
+            params["data_fim"] = future_date
+
+        try:
+            print(f"Fetching contratos with params: {params}")
+            response = requests.get(
+                f"{self.base_url}{self.endpoint}",
+                headers=self._get_headers(access_token),
+                params=params,
+                timeout=60,
+            )
+            response.raise_for_status()
+            return response.json()
+        except requests.exceptions.HTTPError as exc:
+            resp = exc.response
+            if resp is not None:
+                try:
+                    body = resp.text
+                except Exception:
+                    body = "<no body>"
+                print(f"Error fetching contratos ({resp.status_code}): {body}")
+            else:
+                print(f"Error fetching contratos: {exc}")
+            return None
+        except requests.exceptions.RequestException as exc:
+            print(f"Error fetching contratos: {exc}")
+            return None
+
+    def save_contracts(self, contratos: List[Dict]):
+        return self._save_to_bigquery(BQ_TABLES["clientes"], contratos, "id")
+
 # BigQuery endpoint para parcelas
 @etl_bp.route('/parcelas/<customer_id>', methods=['GET'])
 def get_event_installments(customer_id):
@@ -1136,6 +1257,210 @@ def extract_sales(customer_id):
         })
     else:
         return jsonify({"error": "Error saving sales to BigQuery"}), 500
+
+
+@etl_bp.route('/vendas-v2/<customer_id>', methods=['GET'])
+def extract_sales_v2(customer_id):
+    """Endpoint para buscar vendas da API nova (/venda/busca) e salvar em vendas_v2.
+
+    - Usa os mesmos filtros de query string da API da ContaAzul.
+    - Pagina automaticamente até esgotar os resultados.
+    - Achata os campos de cliente, situacao e status_email.
+    - Limpa a tabela vendas_v2 e sobrescreve com o resultado atual.
+    """
+
+    etl = SalesV2ETL(customer_id)
+    access_token = etl._get_token()
+
+    if not access_token:
+        return jsonify({
+            "error": "No access token found",
+            "message": "Please authenticate first using /auth-new"
+        }), 401
+
+    # Copia todos os filtros recebidos como valores simples, exceto página (vamos controlar aqui)
+    base_params = request.args.to_dict()  # flat=True: cada chave vira uma string
+    base_params.pop("pagina", None)
+
+    # Garante um intervalo de datas amplo caso o cliente não envie
+    if not base_params.get("data_inicio"):
+        # pega contratos bem antigos
+        base_params["data_inicio"] = "2000-01-01"
+    if not base_params.get("data_fim"):
+        # vai alguns anos para frente para pegar contratos futuros
+        future_date = (datetime.now() + timedelta(days=365 * 5)).strftime("%Y-%m-%d")
+        base_params["data_fim"] = future_date
+
+    # Define tamanho da página (com limite razoável)
+    try:
+        page_size = int(request.args.get("tamanho_pagina", 100))
+    except ValueError:
+        page_size = 100
+    page_size = max(1, min(page_size, 500))
+
+    all_items: List[Dict] = []
+    page = 1
+    total_itens_api = None
+
+    if not etl.bq_storage._ensure_dataset_exists():
+        return jsonify({
+            "error": "Failed to ensure BigQuery dataset",
+            "message": "Check BigQuery credentials configuration"
+        }), 500
+
+    with tqdm(desc="Fetching vendas v2") as pbar:
+        while True:
+            params = dict(base_params)
+            params["pagina"] = [str(page)]
+            params["tamanho_pagina"] = [str(page_size)]
+
+            data = etl.fetch_sales_page(access_token, params)
+            if not data:
+                break
+
+            itens = data.get("itens") or []
+            if total_itens_api is None:
+                total_itens_api = data.get("total_itens")
+
+            if not itens:
+                break
+
+            all_items.extend(itens)
+            pbar.update(len(itens))
+
+            if len(itens) < page_size:
+                break
+
+            page += 1
+            time.sleep(0.3)
+
+    if not all_items:
+        return jsonify({
+            "message": "No vendas v2 found for given filters",
+            "total_items": 0,
+            "total_itens_api": total_itens_api
+        }), 200
+
+    # Achata os dados conforme especificado
+    flat_rows = [etl._flatten_sale_v2(sale) for sale in all_items]
+
+    # Limpa tabela e grava novamente
+    table_name = BQ_TABLES["vendas_v2"]
+    try:
+        etl.bq_storage.delete_all_data(table_name)
+    except Exception as e:
+        print(f"Erro ao excluir dados existentes de {table_name}: {e}")
+        return jsonify({"error": "Error deleting existing vendas_v2 data from BigQuery"}), 500
+
+    ok = etl.save_vendas_v2(flat_rows)
+    if not ok:
+        return jsonify({"error": "Error saving vendas_v2 to BigQuery"}), 500
+
+    return jsonify({
+        "message": "Vendas v2 extracted and replaced successfully",
+        "total_items": len(flat_rows),
+        "total_itens_api": total_itens_api,
+        "page_size": page_size,
+        "pages_fetched": page
+    })
+
+
+@etl_bp.route('/clientes/<customer_id>', methods=['GET'])
+def extract_contracts(customer_id):
+    """Endpoint para buscar contratos (/clientes) e salvar na tabela 'clientes'.
+
+    - Usa os filtros de query string da API da ContaAzul.
+    - Pagina automaticamente até esgotar os resultados.
+    - Achata o campo cliente (cliente_id, cliente_nome).
+    - Limpa a tabela 'clientes' e sobrescreve com o resultado atual.
+    """
+
+    etl = ContractsETL(customer_id)
+    access_token = etl._get_token()
+
+    if not access_token:
+        return jsonify({
+            "error": "No access token found",
+            "message": "Please authenticate first using /auth-new"
+        }), 401
+
+    # Copia todos os filtros recebidos, exceto página (vamos controlar aqui)
+    base_params = request.args.to_dict(flat=False)
+    base_params.pop("pagina", None)
+
+    # Define tamanho da página (máximo 50 segundo documentação)
+    try:
+        page_size = int(request.args.get("tamanho_pagina", 50))
+    except ValueError:
+        page_size = 50
+    page_size = max(1, min(page_size, 50))
+
+    all_items: List[Dict] = []
+    page = 1
+    itens_totais_api = None
+
+    if not etl.bq_storage._ensure_dataset_exists():
+        return jsonify({
+            "error": "Failed to ensure BigQuery dataset",
+            "message": "Check BigQuery credentials configuration"
+        }), 500
+
+    with tqdm(desc="Fetching contratos") as pbar:
+        while True:
+            params = dict(base_params)
+            params["pagina"] = str(page)
+            params["tamanho_pagina"] = str(page_size)
+
+            data = etl.fetch_contracts_page(access_token, params)
+            if not data:
+                break
+
+            # API pode devolver 'items' ou 'itens' dependendo da versão/doc
+            items = data.get("items") or data.get("itens") or []
+            if itens_totais_api is None:
+                itens_totais_api = data.get("itens_totais")
+
+            if not items:
+                break
+
+            all_items.extend(items)
+            pbar.update(len(items))
+
+            if len(items) < page_size:
+                break
+
+            page += 1
+            time.sleep(0.3)
+
+    if not all_items:
+        return jsonify({
+            "message": "No contratos found for given filters",
+            "total_items": 0,
+            "itens_totais_api": itens_totais_api
+        }), 200
+
+    # Achata os dados conforme especificado
+    flat_rows = [etl._flatten_contract(c) for c in all_items]
+
+    # Limpa tabela e grava novamente
+    table_name = BQ_TABLES["clientes"]
+    try:
+        etl.bq_storage.delete_all_data(table_name)
+    except Exception as e:
+        print(f"Erro ao excluir dados existentes de {table_name}: {e}")
+        return jsonify({"error": "Error deleting existing clientes data from BigQuery"}), 500
+
+    ok = etl.save_contracts(flat_rows)
+    if not ok:
+        return jsonify({"error": "Error saving contratos into clientes table in BigQuery"}), 500
+
+    return jsonify({
+        "message": "Contratos extracted and replaced successfully",
+        "total_items": len(flat_rows),
+        "itens_totais_api": itens_totais_api,
+        "page_size": page_size,
+        "pages_fetched": page
+    })
 
 @etl_bp.route('/categorias/<customer_id>', methods=['GET'])
 def get_all_categories(customer_id):
