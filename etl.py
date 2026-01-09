@@ -45,6 +45,7 @@ BQ_TABLES = {
     "dre_financial_categories": "dre_financial_categories",
     "vendas_v2": "vendas_v2",
     "clientes": "clientes",
+    "pessoas": "pessoas",
     "accounts_receivable": "accounts_receivable", 
     "accounts_payable": "accounts_payable",
     "parcelas": "parcelas",
@@ -914,6 +915,87 @@ class ContractsETL(BaseETL):
     def save_contracts(self, contratos: List[Dict]):
         return self._save_to_bigquery(BQ_TABLES["clientes"], contratos, "id")
 
+
+class PeopleETL(BaseETL):
+    """ETL para pessoas (/pessoas) gravando em tabela 'pessoas'."""
+
+    def __init__(self, customer_id):
+        super().__init__(customer_id, "/pessoas")
+
+    def _flatten_person(self, person: Dict) -> Dict:
+        endereco = person.get("endereco") or {}
+        perfis = person.get("perfis") or []
+
+        # join perfis into a simple string to avoid nested lists
+        perfis_str = None
+        try:
+            if isinstance(perfis, list):
+                perfis_str = ";".join([str(p) for p in perfis]) if perfis else None
+            else:
+                perfis_str = str(perfis)
+        except Exception:
+            perfis_str = None
+
+        return {
+            "id": person.get("id"),
+            "id_legado": person.get("id_legado"),
+            "uuid_legado": person.get("uuid_legado"),
+            "nome": person.get("nome"),
+            "documento": person.get("documento"),
+            "email": person.get("email"),
+            "telefone": person.get("telefone"),
+            "ativo": person.get("ativo"),
+            "data_criacao": person.get("data_criacao"),
+            "data_alteracao": person.get("data_alteracao"),
+            "tipo_pessoa": person.get("tipo_pessoa"),
+            "observacoes_gerais": person.get("observacoes_gerais"),
+            "perfis": perfis_str,
+            # endereco flattened
+            "endereco_logradouro": endereco.get("logradouro"),
+            "endereco_numero": endereco.get("numero"),
+            "endereco_complemento": endereco.get("complemento"),
+            "endereco_bairro": endereco.get("bairro"),
+            "endereco_cidade": endereco.get("cidade"),
+            "endereco_uf": endereco.get("uf"),
+            "endereco_pais": endereco.get("pais"),
+            "endereco_cep": endereco.get("cep"),
+        }
+
+    def fetch_people_page(self, access_token: str, params: Dict) -> Optional[Dict]:
+        """Busca uma página de pessoas na API v2."""
+        # ensure wide creation date range if not provided
+        if not params.get("data_criacao_inicio"):
+            params["data_criacao_inicio"] = "2000-01-01"
+        if not params.get("data_criacao_fim"):
+            params["data_criacao_fim"] = (datetime.now() + timedelta(days=365 * 5)).strftime("%Y-%m-%d")
+
+        try:
+            response = requests.get(
+                f"{self.base_url}{self.endpoint}",
+                headers=self._get_headers(access_token),
+                params=params,
+                timeout=60,
+            )
+            response.raise_for_status()
+            return response.json()
+        except requests.exceptions.HTTPError as exc:
+            resp = exc.response
+            if resp is not None:
+                try:
+                    body = resp.text
+                except Exception:
+                    body = "<no body>"
+                print(f"Error fetching pessoas ({resp.status_code}): {body}")
+            else:
+                print(f"Error fetching pessoas: {exc}")
+            return None
+        except requests.exceptions.RequestException as exc:
+            print(f"Error fetching pessoas: {exc}")
+            return None
+
+    def save_pessoas(self, pessoas: List[Dict]):
+        return self._save_to_bigquery(BQ_TABLES["pessoas"], pessoas, "id")
+
 # BigQuery endpoint para parcelas
 @etl_bp.route('/parcelas/<customer_id>', methods=['GET'])
 def get_event_installments(customer_id):
@@ -1458,6 +1540,98 @@ def extract_contracts(customer_id):
         "message": "Contratos extracted and replaced successfully",
         "total_items": len(flat_rows),
         "itens_totais_api": itens_totais_api,
+        "page_size": page_size,
+        "pages_fetched": page
+    })
+
+
+@etl_bp.route('/pessoas/<customer_id>', methods=['GET'])
+def extract_pessoas(customer_id):
+    """Endpoint para buscar pessoas (/pessoas) e salvar na tabela 'pessoas'."""
+
+    etl = PeopleETL(customer_id)
+    access_token = etl._get_token()
+
+    if not access_token:
+        return jsonify({
+            "error": "No access token found",
+            "message": "Please authenticate first using /auth-new"
+        }), 401
+
+    # Copia todos os filtros recebidos como valores simples, exceto página
+    base_params = request.args.to_dict()
+    base_params.pop("pagina", None)
+
+    # Garante um intervalo de datas amplo caso o cliente não envie
+    if not base_params.get("data_criacao_inicio"):
+        base_params["data_criacao_inicio"] = "2000-01-01"
+    if not base_params.get("data_criacao_fim"):
+        base_params["data_criacao_fim"] = (datetime.now() + timedelta(days=365 * 5)).strftime("%Y-%m-%d")
+
+    try:
+        page_size = int(request.args.get("tamanho_pagina", 100))
+    except ValueError:
+        page_size = 100
+    page_size = max(1, min(page_size, 500))
+
+    all_items: List[Dict] = []
+    page = 1
+    total_itens_api = None
+
+    if not etl.bq_storage._ensure_dataset_exists():
+        return jsonify({"error": "Failed to ensure BigQuery dataset"}), 500
+
+    with tqdm(desc="Fetching pessoas") as pbar:
+        while True:
+            params = dict(base_params)
+            params.update({"pagina": page, "tamanho_pagina": page_size})
+            resp = etl.fetch_people_page(access_token, params)
+            if not resp:
+                break
+
+            if isinstance(resp, dict):
+                items = resp.get("itens") or resp.get("items") or resp.get("data") or []
+                total_itens_api = resp.get("itens_totais") or resp.get("itens_totais_api") or resp.get("total")
+            elif isinstance(resp, list):
+                items = resp
+            else:
+                items = []
+
+            if not items:
+                break
+
+            all_items.extend([i for i in items if isinstance(i, dict)])
+            pbar.update(len(items))
+
+            if total_itens_api and len(all_items) >= int(total_itens_api):
+                break
+
+            if len(items) < page_size:
+                break
+
+            page += 1
+
+    if not all_items:
+        return jsonify({"error": "No pessoas data found"}), 404
+
+    # Achata os dados e grava
+    flat_rows = [etl._flatten_person(p) for p in all_items]
+
+    table_name = BQ_TABLES["pessoas"]
+    try:
+        etl.bq_storage.delete_all_data(table_name)
+    except Exception as e:
+        print(f"Erro ao excluir dados existentes de {table_name}: {e}")
+        return jsonify({"error": "Failed to clear existing table"}), 500
+
+    ok = etl.save_pessoas(flat_rows)
+    if not ok:
+        return jsonify({"error": "Error saving pessoas to BigQuery"}), 500
+
+    return jsonify({
+        "message": "Pessoas extracted and replaced successfully",
+        "total_items": len(flat_rows),
+        "total_itens_api": total_itens_api,
         "page_size": page_size,
         "pages_fetched": page
     })
@@ -2399,4 +2573,58 @@ def sincroniza_parcelas_faltantes(customer_id):
         "baixas_criadas": total_baixas,
         "erros": erros
     })
+
+
+@etl_bp.route('/deleta-parcelas-duplicatas/<customer_id>', methods=['GET'])
+def deleta_parcelas_duplicatas(customer_id):
+    """Remove registros duplicados da tabela de parcelas deixando apenas a mais recente por `_loaded_at`.
+
+    Regras:
+    - Agrupa por `parcela_id` (ignora valores nulos).
+    - Mantém a linha com `_loaded_at` mais recente; em caso de empate, escolhe arbitrariamente.
+    """
+    bq_storage = BigQueryStorage(customer_id)
+
+    if not bq_storage._ensure_dataset_exists():
+        return jsonify({"error": "Failed to ensure BigQuery dataset exists"}), 500
+
+    table_ref = bq_storage._get_table_ref(BQ_TABLES["parcelas"])
+
+    # Verifica se a tabela existe
+    try:
+        bq_storage.client.get_table(table_ref)
+    except Exception:
+        return jsonify({"message": "Tabela parcelas não encontrada", "deleted_rows": 0}), 404
+
+    # Query DML para deletar todas as linhas onde, para um mesmo parcela_id,
+    # não é a linha mais recente por _loaded_at. Em caso de empate de _loaded_at,
+    # o ORDER BY RAND() garante uma escolha arbitrária entre iguais.
+    delete_query = f'''
+    DELETE FROM `{table_ref}` t
+    WHERE t.parcela_id IS NOT NULL
+      AND EXISTS (
+        SELECT 1 FROM (
+          SELECT parcela_id, _loaded_at,
+                 ROW_NUMBER() OVER (PARTITION BY parcela_id ORDER BY _loaded_at DESC, RAND()) AS rn
+          FROM `{table_ref}`
+          WHERE parcela_id IS NOT NULL
+        ) r
+        WHERE r.parcela_id = t.parcela_id
+          AND r._loaded_at = t._loaded_at
+          AND r.rn > 1
+      )
+    '''
+
+    try:
+        job = bq_storage.client.query(delete_query, location=bq_storage.location)
+        job.result()
+        deleted = getattr(job, 'num_dml_affected_rows', None)
+        # Retorna o número de linhas deletadas quando disponível
+        return jsonify({
+            "message": "Parcelas duplicadas removidas",
+            "deleted_rows": int(deleted) if deleted is not None else None
+        }), 200
+    except Exception as e:
+        print(f"Error deleting duplicate parcelas: {e}")
+        return jsonify({"error": "Error deleting duplicates", "message": str(e)}), 500
 
