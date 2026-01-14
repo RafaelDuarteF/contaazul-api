@@ -468,6 +468,7 @@ class AccountsPayableETL(BaseETL):
         due_date = account.get("data_vencimento", "")
         creation_date = account.get("data_criacao", "")
         update_date = account.get("data_alteracao", "")
+        fornecedor = account.get("fornecedor", {})
         
         return {
             "id": account.get("id"),
@@ -480,7 +481,9 @@ class AccountsPayableETL(BaseETL):
             "data_criacao": creation_date[:10] if creation_date else "",
             "data_alteracao": update_date[:10] if update_date else "",
             "categoria_principal_id": account.get("categoria_principal_id"),
-            "categoria_principal_nome": account.get("categoria_principal_nome")
+            "categoria_principal_nome": account.get("categoria_principal_nome"),
+            "fornecedor_id": fornecedor.get("id"),
+            "fornecedor_nome": fornecedor.get("nome")
         }
 
     def search_accounts_payable(
@@ -683,6 +686,7 @@ class AccountsReceivableETL(BaseETL):
         due_date = account.get("data_vencimento", "")
         creation_date = account.get("data_criacao", "")
         update_date = account.get("data_alteracao", "")
+        cliente = account.get("cliente", {})
         
         return {
             "id": account.get("id"),
@@ -695,7 +699,9 @@ class AccountsReceivableETL(BaseETL):
             "data_criacao": creation_date[:10] if creation_date else "",
             "data_alteracao": update_date[:10] if update_date else "",
             "categoria_principal_id": account.get("categoria_principal_id"),
-            "categoria_principal_nome": account.get("categoria_principal_nome")
+            "categoria_principal_nome": account.get("categoria_principal_nome"),
+            "cliente_id": cliente.get("id"),
+            "cliente_nome": cliente.get("nome")
         }
 
     def search_accounts_receivable(
@@ -2317,6 +2323,17 @@ def get_combined_accounts(customer_id):
                         parent_category = category_map.get(parent_id, {})
                         account_dict['categoria_pai_id'] = parent_id
                         account_dict['categoria_pai_nome'] = parent_category.get('nome', '')
+                
+                # Garante que todas as 4 colunas estejam presentes
+                # Se não existem, adiciona com valor None
+                if 'cliente_id' not in account_dict:
+                    account_dict['cliente_id'] = None
+                if 'cliente_nome' not in account_dict:
+                    account_dict['cliente_nome'] = None
+                if 'fornecedor_id' not in account_dict:
+                    account_dict['fornecedor_id'] = None
+                if 'fornecedor_nome' not in account_dict:
+                    account_dict['fornecedor_nome'] = None
                 
                 processed_accounts.append(account_dict)
             return processed_accounts
