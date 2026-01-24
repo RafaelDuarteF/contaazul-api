@@ -1029,37 +1029,26 @@ def get_event_installments(customer_id):
     if df_existente.empty:
         return jsonify({"error": "No events found"}), 404
 
-    if 'pago' not in df_existente.columns:
-        df_existente['pago'] = 0
-
-    # Filtra eventos com pago > 0
-    df_eventos_com_pago = df_existente[
-        df_existente['pago'].fillna(0).astype(float) > 0
-    ].copy()
-    
-    if df_eventos_com_pago.empty:
-        return jsonify({"error": "No events with pago > 0 found"}), 404
-
     # Aplica filtro incremental
     if last_sync:
         # Usa data_alteracao ou data_criacao para comparação
-        df_eventos_com_pago['data_alteracao_dt'] = df_eventos_com_pago.apply(
+        df_existente['data_alteracao_dt'] = df_existente.apply(
             lambda row: etl._parse_datetime_value(
                 row.get('data_alteracao') or row.get('data_criacao')
             ),
             axis=1
         )
-        valid_mask = df_eventos_com_pago['data_alteracao_dt'].notna()
+        valid_mask = df_existente['data_alteracao_dt'].notna()
         if valid_mask.any():
-            df_eventos_para_processar = df_eventos_com_pago[
-                valid_mask & (df_eventos_com_pago['data_alteracao_dt'] > last_sync)
+            df_eventos_para_processar = df_existente[
+                valid_mask & (df_existente['data_alteracao_dt'] > last_sync)
             ].copy()
         else:
             # Se não conseguimos interpretar nenhuma data, processa tudo para evitar perda
-            df_eventos_para_processar = df_eventos_com_pago.copy()
+            df_eventos_para_processar = df_existente.copy()
         print(f"Processando {len(df_eventos_para_processar)} eventos modificados desde {last_sync}")
     else:
-        df_eventos_para_processar = df_eventos_com_pago.copy()
+        df_eventos_para_processar = df_existente.copy()
         print(f"Primeira execução - processando {len(df_eventos_para_processar)} eventos")
 
     if df_eventos_para_processar.empty:
@@ -1197,26 +1186,110 @@ def get_event_installments(customer_id):
         for parcela in parcelas_iter:
             if not isinstance(parcela, dict):
                 continue
-            parcela_row = {
-                "parcela_id": parcela.get('id'),
-                "parcela_status": parcela.get('status'),
-                "condicao_pagamento": parcela.get('condicao_pagamento'),
-                "referencia": parcela.get('referencia'),
-                "agendado": parcela.get('agendado'),
-                "tipo_evento": parcela.get('tipo'),
-                "rateio": parcela.get('rateio'),
-                "conciliado": parcela.get('conciliado'),
-                "valor_pago": parcela.get('valor_pago'),
-                "perda": parcela.get('perda'),
-                "nao_pago": parcela.get('nao_pago'),
-                "data_vencimento": parcela.get('data_vencimento'),
-                "data_pagamento_previsto": parcela.get('data_pagamento_previsto'),
-                "descricao": parcela.get('descricao'),
-                "id_conta_financeira": parcela.get('id_conta_financeira'),
-                "metodo_pagamento": parcela.get('metodo_pagamento'),
-                "parent_evento_id": evento_id,
-            }
-            parcelas_registros.append(parcela_row)
+            
+            # Extrai informações de rateio
+            evento_data = parcela.get('evento', {})
+            rateio_list = evento_data.get('rateio', [])
+            
+            # Se houver múltiplos rateios, cria uma linha por rateio
+            if rateio_list:
+                for rateio in rateio_list:
+                    rateio_centro_custo_list = rateio.get('rateio_centro_custo', [])
+                    
+                    # Se houver múltiplos centros de custo, cria uma linha por centro
+                    if rateio_centro_custo_list:
+                        for centro_custo in rateio_centro_custo_list:
+                            parcela_row = {
+                                "parcela_id": parcela.get('id'),
+                                "parcela_status": parcela.get('status'),
+                                "condicao_pagamento": str(evento_data.get('condicao_pagamento', {})),
+                                "referencia": parcela.get('referencia'),
+                                "agendado": evento_data.get('agendado'),
+                                "tipo_evento": evento_data.get('tipo'),
+                                "rateio": str(rateio_list),
+                                "conciliado": parcela.get('conciliado'),
+                                "valor_pago": parcela.get('valor_pago'),
+                                "perda": str(parcela.get('perda', {})),
+                                "nao_pago": parcela.get('nao_pago'),
+                                "data_vencimento": parcela.get('data_vencimento'),
+                                "data_pagamento_previsto": parcela.get('data_pagamento_previsto'),
+                                "descricao": parcela.get('descricao'),
+                                "id_conta_financeira": parcela.get('id_conta_financeira'),
+                                "metodo_pagamento": parcela.get('metodo_pagamento'),
+                                "parent_evento_id": evento_id,
+                                # Colunas de rateio
+                                "rateio_id_categoria": rateio.get('id_categoria'),
+                                "rateio_nome_categoria": rateio.get('nome_categoria'),
+                                "rateio_valor": float(rateio.get('valor', 0)) if rateio.get('valor') else None,
+                                "rateio_centro_custo_id": centro_custo.get('id_centro_custo'),
+                                "rateio_centro_custo_nome": centro_custo.get('nome_centro_custo'),
+                                "rateio_centro_custo_valor": float(centro_custo.get('valor', 0)) if centro_custo.get('valor') else None,
+                                "_loaded_at": datetime.now(etl.timezone).replace(microsecond=0).isoformat(),
+                                "parcela_loaded_at": datetime.now(etl.timezone).replace(microsecond=0).isoformat(),
+                            }
+                            parcelas_registros.append(parcela_row)
+                    else:
+                        # Sem centro de custo
+                        parcela_row = {
+                            "parcela_id": parcela.get('id'),
+                            "parcela_status": parcela.get('status'),
+                            "condicao_pagamento": str(evento_data.get('condicao_pagamento', {})),
+                            "referencia": parcela.get('referencia'),
+                            "agendado": evento_data.get('agendado'),
+                            "tipo_evento": evento_data.get('tipo'),
+                            "rateio": str(rateio_list),
+                            "conciliado": parcela.get('conciliado'),
+                            "valor_pago": parcela.get('valor_pago'),
+                            "perda": str(parcela.get('perda', {})),
+                            "nao_pago": parcela.get('nao_pago'),
+                            "data_vencimento": parcela.get('data_vencimento'),
+                            "data_pagamento_previsto": parcela.get('data_pagamento_previsto'),
+                            "descricao": parcela.get('descricao'),
+                            "id_conta_financeira": parcela.get('id_conta_financeira'),
+                            "metodo_pagamento": parcela.get('metodo_pagamento'),
+                            "parent_evento_id": evento_id,
+                            # Colunas de rateio
+                            "rateio_id_categoria": rateio.get('id_categoria'),
+                            "rateio_nome_categoria": rateio.get('nome_categoria'),
+                            "rateio_valor": float(rateio.get('valor', 0)) if rateio.get('valor') else None,
+                            "rateio_centro_custo_id": None,
+                            "rateio_centro_custo_nome": None,
+                            "rateio_centro_custo_valor": None,
+                            "_loaded_at": datetime.now(etl.timezone).replace(microsecond=0).isoformat(),
+                            "parcela_loaded_at": datetime.now(etl.timezone).replace(microsecond=0).isoformat(),
+                        }
+                        parcelas_registros.append(parcela_row)
+            else:
+                # Sem rateio
+                parcela_row = {
+                    "parcela_id": parcela.get('id'),
+                    "parcela_status": parcela.get('status'),
+                    "condicao_pagamento": str(evento_data.get('condicao_pagamento', {})),
+                    "referencia": parcela.get('referencia'),
+                    "agendado": evento_data.get('agendado'),
+                    "tipo_evento": evento_data.get('tipo'),
+                    "rateio": str(rateio_list),
+                    "conciliado": parcela.get('conciliado'),
+                    "valor_pago": parcela.get('valor_pago'),
+                    "perda": str(parcela.get('perda', {})),
+                    "nao_pago": parcela.get('nao_pago'),
+                    "data_vencimento": parcela.get('data_vencimento'),
+                    "data_pagamento_previsto": parcela.get('data_pagamento_previsto'),
+                    "descricao": parcela.get('descricao'),
+                    "id_conta_financeira": parcela.get('id_conta_financeira'),
+                    "metodo_pagamento": parcela.get('metodo_pagamento'),
+                    "parent_evento_id": evento_id,
+                    # Colunas de rateio
+                    "rateio_id_categoria": None,
+                    "rateio_nome_categoria": None,
+                    "rateio_valor": None,
+                    "rateio_centro_custo_id": None,
+                    "rateio_centro_custo_nome": None,
+                    "rateio_centro_custo_valor": None,
+                    "_loaded_at": datetime.now(etl.timezone).replace(microsecond=0).isoformat(),
+                    "parcela_loaded_at": datetime.now(etl.timezone).replace(microsecond=0).isoformat(),
+                }
+                parcelas_registros.append(parcela_row)
 
             # Extrai baixas individuais para tabela auxiliar parcelas_baixas
             baixas = parcela.get('baixas') if isinstance(parcela.get('baixas'), list) else []
@@ -2447,9 +2520,310 @@ def clean_customer_data(customer_id):
             "message": str(e)
         }), 500
     
+@etl_bp.route('/repopular-parcelas/<customer_id>', methods=['GET'])
+def repopular_parcelas(customer_id):
+    """Endpoint para repopular parcelas e parcelas_baixas com dados completos do rateio (BATCH de 100)."""
+    bq_storage = BigQueryStorage(customer_id)
+    etl = BaseETL(customer_id, "")
+    access_token = etl._get_token()
+    
+    if not access_token:
+        return jsonify({"error": "No access token found"}), 401
+    
+    print("\n" + "="*80)
+    print(f"🔄 INICIANDO REPOPULAÇÃO DE PARCELAS EM BATCH")
+    print(f"🆔 Cliente: {customer_id}")
+    print("="*80 + "\n")
+    
+    # Carrega contas a pagar e a receber
+    print("📂 Carregando contas a receber...")
+    df_receivables = bq_storage.load_data(BQ_TABLES["accounts_receivable"])
+    print(f"   ✅ {len(df_receivables)} contas a receber carregadas")
+    
+    print("📂 Carregando contas a pagar...")
+    df_payables = bq_storage.load_data(BQ_TABLES["accounts_payable"])
+    print(f"   ✅ {len(df_payables)} contas a pagar carregadas")
+    
+    df_contas = pd.concat([df_receivables, df_payables], ignore_index=True)
+    print(f"📊 Total de contas: {len(df_contas)}\n")
+    
+    if df_contas.empty:
+        return jsonify({"error": "No accounts found"}), 404
+    
+    # Exclui dados atuais
+    print("🗑️  Limpando dados antigos...")
+    try:
+        bq_storage.delete_all_data(BQ_TABLES["parcelas"])
+        print(f"   ✅ Tabela {BQ_TABLES['parcelas']} limpa")
+        bq_storage.delete_all_data(BQ_TABLES["parcelas_baixas"])
+        print(f"   ✅ Tabela {BQ_TABLES['parcelas_baixas']} limpa\n")
+    except Exception as e:
+        print(f"❌ Erro ao excluir dados: {e}")
+        return jsonify({"error": "Error clearing tables"}), 500
+    
+    total_parcelas_salvas = 0
+    total_baixas_salvas = 0
+    total_batches_parcelas = 0
+    total_batches_baixas = 0
+    erros = []
+    
+    batch_size = 100
+    parcelas_batch = []
+    baixas_batch = []
+    
+    # Processa cada evento
+    print(f"🔄 Processando {len(df_contas)} eventos em BATCH de {batch_size}...\n")
+    
+    for idx, (_, evento) in enumerate(df_contas.iterrows(), 1):
+        evento_id = evento['id']
+        
+        url = f"https://api-v2.contaazul.com/v1/financeiro/eventos-financeiros/parcelas/{evento_id}"
+        
+        try:
+            resp = requests.get(url, headers=etl._get_headers(access_token), timeout=30)
+            
+            if resp.status_code == 429:
+                print(f"⚠️  Rate limit - aguardando 30s...")
+                time.sleep(30)
+                resp = requests.get(url, headers=etl._get_headers(access_token), timeout=30)
+            
+            if resp.status_code == 401:
+                print(f"⚠️  Token expirado - renovando...")
+                access_token = etl._get_token()
+                if not access_token:
+                    continue
+                resp = requests.get(url, headers=etl._get_headers(access_token), timeout=30)
+            
+            resp.raise_for_status()
+            parcelas_list = resp.json()
+            
+            if not isinstance(parcelas_list, list):
+                parcelas_list = [parcelas_list]
+            
+        except Exception as e:
+            erro_msg = f"Erro ao buscar parcelas do evento {evento_id}: {str(e)}"
+            erros.append(erro_msg)
+            print(f"❌ {erro_msg}")
+            continue
+        
+        # Processa cada parcela
+        for parcela in parcelas_list:
+            if not isinstance(parcela, dict):
+                continue
+            
+            # Extrai informações de rateio
+            evento_data = parcela.get('evento', {})
+            rateio_list = evento_data.get('rateio', [])
+            
+            # Se houver múltiplos rateios, cria uma linha por rateio
+            if rateio_list:
+                for rateio in rateio_list:
+                    rateio_centro_custo_list = rateio.get('rateio_centro_custo', [])
+                    
+                    # Se houver múltiplos centros de custo, cria uma linha por centro
+                    if rateio_centro_custo_list:
+                        for centro_custo in rateio_centro_custo_list:
+                            parcela_row = {
+                                "parcela_id": parcela.get('id'),
+                                "parcela_status": parcela.get('status'),
+                                "condicao_pagamento": str(evento_data.get('condicao_pagamento', {})),
+                                "referencia": parcela.get('referencia'),
+                                "agendado": str(evento_data.get('agendado')).lower() if evento_data.get('agendado') is not None else None,
+                                "tipo_evento": evento_data.get('tipo'),
+                                "rateio": str(rateio_list),
+                                "conciliado": parcela.get('conciliado'),
+                                "valor_pago": parcela.get('valor_pago'),
+                                "perda": str(parcela.get('perda', {})),
+                                "nao_pago": parcela.get('nao_pago'),
+                                "data_vencimento": parcela.get('data_vencimento'),
+                                "data_pagamento_previsto": parcela.get('data_pagamento_previsto'),
+                                "descricao": parcela.get('descricao'),
+                                "id_conta_financeira": parcela.get('id_conta_financeira'),
+                                "metodo_pagamento": parcela.get('metodo_pagamento'),
+                                "parent_evento_id": evento_id,
+                                # Colunas de rateio
+                                "rateio_id_categoria": rateio.get('id_categoria'),
+                                "rateio_nome_categoria": rateio.get('nome_categoria'),
+                                "rateio_valor": float(rateio.get('valor', 0)) if rateio.get('valor') else None,
+                                "rateio_centro_custo_id": centro_custo.get('id_centro_custo'),
+                                "rateio_centro_custo_nome": centro_custo.get('nome_centro_custo'),
+                                "rateio_centro_custo_valor": float(centro_custo.get('valor', 0)) if centro_custo.get('valor') else None,
+                                "_loaded_at": datetime.now(etl.timezone).replace(microsecond=0).isoformat(),
+                                "parcela_loaded_at": datetime.now(etl.timezone).replace(microsecond=0).isoformat(),
+                            }
+                            parcelas_batch.append(parcela_row)
+                    else:
+                        # Sem centro de custo
+                        parcela_row = {
+                            "parcela_id": parcela.get('id'),
+                            "parcela_status": parcela.get('status'),
+                            "condicao_pagamento": str(evento_data.get('condicao_pagamento', {})),
+                            "referencia": parcela.get('referencia'),
+                            "agendado": str(evento_data.get('agendado')).lower() if evento_data.get('agendado') is not None else None,
+                            "tipo_evento": evento_data.get('tipo'),
+                            "rateio": str(rateio_list),
+                            "conciliado": parcela.get('conciliado'),
+                            "valor_pago": parcela.get('valor_pago'),
+                            "perda": str(parcela.get('perda', {})),
+                            "nao_pago": parcela.get('nao_pago'),
+                            "data_vencimento": parcela.get('data_vencimento'),
+                            "data_pagamento_previsto": parcela.get('data_pagamento_previsto'),
+                            "descricao": parcela.get('descricao'),
+                            "id_conta_financeira": parcela.get('id_conta_financeira'),
+                            "metodo_pagamento": parcela.get('metodo_pagamento'),
+                            "parent_evento_id": evento_id,
+                            # Colunas de rateio
+                            "rateio_id_categoria": rateio.get('id_categoria'),
+                            "rateio_nome_categoria": rateio.get('nome_categoria'),
+                            "rateio_valor": float(rateio.get('valor', 0)) if rateio.get('valor') else None,
+                            "rateio_centro_custo_id": None,
+                            "rateio_centro_custo_nome": None,
+                            "rateio_centro_custo_valor": None,
+                            "_loaded_at": datetime.now(etl.timezone).replace(microsecond=0).isoformat(),
+                            "parcela_loaded_at": datetime.now(etl.timezone).replace(microsecond=0).isoformat(),
+                        }
+                        parcelas_batch.append(parcela_row)
+            else:
+                # Sem rateio
+                parcela_row = {
+                    "parcela_id": parcela.get('id'),
+                    "parcela_status": parcela.get('status'),
+                    "condicao_pagamento": str(evento_data.get('condicao_pagamento', {})),
+                    "referencia": parcela.get('referencia'),
+                    "agendado": str(evento_data.get('agendado')).lower() if evento_data.get('agendado') is not None else None,
+                    "tipo_evento": evento_data.get('tipo'),
+                    "rateio": str(rateio_list),
+                    "conciliado": parcela.get('conciliado'),
+                    "valor_pago": parcela.get('valor_pago'),
+                    "perda": str(parcela.get('perda', {})),
+                    "nao_pago": parcela.get('nao_pago'),
+                    "data_vencimento": parcela.get('data_vencimento'),
+                    "data_pagamento_previsto": parcela.get('data_pagamento_previsto'),
+                    "descricao": parcela.get('descricao'),
+                    "id_conta_financeira": parcela.get('id_conta_financeira'),
+                    "metodo_pagamento": parcela.get('metodo_pagamento'),
+                    "parent_evento_id": evento_id,
+                    # Colunas de rateio
+                    "rateio_id_categoria": None,
+                    "rateio_nome_categoria": None,
+                    "rateio_valor": None,
+                    "rateio_centro_custo_id": None,
+                    "rateio_centro_custo_nome": None,
+                    "rateio_centro_custo_valor": None,
+                    "_loaded_at": datetime.now(etl.timezone).replace(microsecond=0).isoformat(),
+                    "parcela_loaded_at": datetime.now(etl.timezone).replace(microsecond=0).isoformat(),
+                }
+                parcelas_batch.append(parcela_row)
+            
+            # Processa baixas
+            baixas = parcela.get('baixas', [])
+            for baixa in baixas:
+                if not isinstance(baixa, dict):
+                    continue
+                
+                vc = baixa.get('valor_composicao', {})
+                if isinstance(vc, str):
+                    try:
+                        vc = json.loads(vc)
+                    except Exception:
+                        vc = {}
+                
+                baixa_row = {
+                    "parcela_id": parcela.get('id'),
+                    "baixa_id": baixa.get('id'),
+                    "baixa_versao": baixa.get('versao'),
+                    "baixa_data_pagamento": baixa.get('data_pagamento'),
+                    "baixa_id_reconciliacao": baixa.get('id_reconciliacao'),
+                    "baixa_id_parcela": baixa.get('id_parcela'),
+                    "baixa_observacao": baixa.get('observacao'),
+                    "baixa_metodo_pagamento": baixa.get('metodo_pagamento'),
+                    "baixa_origem": baixa.get('origem'),
+                    "baixa_atualizado_em": baixa.get('atualizado_em'),
+                    "baixa_desconto": vc.get('desconto'),
+                    "baixa_juros": vc.get('juros'),
+                    "baixa_multa": vc.get('multa'),
+                    "baixa_taxa": vc.get('taxa'),
+                    "baixa_valor_bruto": vc.get('valor_bruto'),
+                    "baixa_valor_liquido": vc.get('valor_liquido'),
+                    "_loaded_at": datetime.now(etl.timezone).replace(microsecond=0).isoformat(),
+                    "baixa_loaded_at": datetime.now(etl.timezone).replace(microsecond=0).isoformat(),
+                }
+                baixas_batch.append(baixa_row)
+        
+        # Se atingiu batch_size de parcelas, salva
+        if len(parcelas_batch) >= batch_size:
+            print(f"📦 BATCH #{total_batches_parcelas + 1}: Salvando {len(parcelas_batch)} parcelas no BigQuery...")
+            ok_p = bq_storage.save_data(BQ_TABLES["parcelas"], parcelas_batch, "parcela_id")
+            if ok_p:
+                total_parcelas_salvas += len(parcelas_batch)
+                total_batches_parcelas += 1
+                print(f"   ✅ {len(parcelas_batch)} parcelas salvas | Total acumulado: {total_parcelas_salvas}\n")
+            parcelas_batch = []
+        
+        # Se atingiu batch_size de baixas, salva
+        if len(baixas_batch) >= batch_size:
+            print(f"📦 BATCH #{total_batches_baixas + 1}: Salvando {len(baixas_batch)} baixas no BigQuery...")
+            ok_b = bq_storage.save_data(BQ_TABLES["parcelas_baixas"], baixas_batch, "baixa_id")
+            if ok_b:
+                total_baixas_salvas += len(baixas_batch)
+                total_batches_baixas += 1
+                print(f"   ✅ {len(baixas_batch)} baixas salvas | Total acumulado: {total_baixas_salvas}\n")
+            baixas_batch = []
+        
+        # Mostra progresso
+        if idx % 10 == 0:
+            print(f"   ⏳ Processados {idx}/{len(df_contas)} eventos | " + 
+                  f"Parcelas em buffer: {len(parcelas_batch)} | Baixas em buffer: {len(baixas_batch)}")
+        
+        time.sleep(0.3)  # Rate limit
+    
+    # Salva os registros restantes
+    print(f"\n📦 BATCH FINAL - Salvando registros restantes...")
+    if parcelas_batch:
+        print(f"📦 BATCH #{total_batches_parcelas + 1}: Salvando {len(parcelas_batch)} parcelas finais...")
+        ok_p = bq_storage.save_data(BQ_TABLES["parcelas"], parcelas_batch, "parcela_id")
+        if ok_p:
+            total_parcelas_salvas += len(parcelas_batch)
+            total_batches_parcelas += 1
+            print(f"   ✅ {len(parcelas_batch)} parcelas finais salvas | Total acumulado: {total_parcelas_salvas}\n")
+    
+    if baixas_batch:
+        print(f"📦 BATCH #{total_batches_baixas + 1}: Salvando {len(baixas_batch)} baixas finais...")
+        ok_b = bq_storage.save_data(BQ_TABLES["parcelas_baixas"], baixas_batch, "baixa_id")
+        if ok_b:
+            total_baixas_salvas += len(baixas_batch)
+            total_batches_baixas += 1
+            print(f"   ✅ {len(baixas_batch)} baixas finais salvas | Total acumulado: {total_baixas_salvas}\n")
+    
+    # Salva log de sync
+    if total_parcelas_salvas > 0:
+        bq_storage.save_sync_log(BQ_TABLES["parcelas"], total_parcelas_salvas)
+    
+    # Resumo final
+    print("="*80)
+    print(f"✅ REPOPULAÇÃO CONCLUÍDA COM SUCESSO!")
+    print(f"📊 Total de parcelas salvas: {total_parcelas_salvas}")
+    print(f"📊 Total de baixas salvas: {total_baixas_salvas}")
+    print(f"📦 Total de batches (parcelas): {total_batches_parcelas}")
+    print(f"📦 Total de batches (baixas): {total_batches_baixas}")
+    if erros:
+        print(f"⚠️  Total de erros: {len(erros)}")
+    print("="*80 + "\n")
+    
+    return jsonify({
+        "message": "Parcelas repopuladas com sucesso",
+        "total_parcelas_salvas": total_parcelas_salvas,
+        "total_baixas_salvas": total_baixas_salvas,
+        "total_batches_parcelas": total_batches_parcelas,
+        "total_batches_baixas": total_batches_baixas,
+        "batch_size": batch_size,
+        "erros": erros if erros else []
+    })
+
+
 @etl_bp.route('/sincroniza-parcelas-faltantes/<customer_id>', methods=['GET'])
 def sincroniza_parcelas_faltantes(customer_id):
-    """Compara contas a pagar/receber com parcelas e sincroniza as faltantes."""
+    """Compara contas a pagar/receber com parcelas e sincroniza as faltantes (BATCH de 100)."""
     bq_storage = BigQueryStorage(customer_id)
     etl = BaseETL(customer_id, "")
 
@@ -2457,16 +2831,12 @@ def sincroniza_parcelas_faltantes(customer_id):
     df_receivables = bq_storage.load_data(BQ_TABLES["accounts_receivable"])
     df_payables = bq_storage.load_data(BQ_TABLES["accounts_payable"])
     df_contas = pd.concat([df_receivables, df_payables], ignore_index=True)
-    # Filtra apenas contas com pago > 0
-    if 'pago' not in df_contas.columns:
-        df_contas['pago'] = 0
-    df_contas_pago = df_contas[df_contas['pago'].fillna(0).astype(float) > 0].copy()
 
     # Carrega parcelas
     df_parcelas = bq_storage.load_data(BQ_TABLES["parcelas"])
 
     # IDs de contas e de parcelas já associadas
-    contas_ids = set(df_contas_pago["id"].dropna().astype(str))
+    contas_ids = set(df_contas["id"].dropna().astype(str))
     parcelas_event_ids = set(df_parcelas["parent_evento_id"].dropna().astype(str))
 
     # Contas sem parcela associada
@@ -2479,57 +2849,168 @@ def sincroniza_parcelas_faltantes(customer_id):
     if not access_token:
         return jsonify({"error": "No access token found"}), 401
 
+    print("\n" + "="*80)
+    print(f"🔄 SINCRONIZANDO PARCELAS FALTANTES EM BATCH")
+    print(f"🆔 Cliente: {customer_id}")
+    print(f"📊 Contas sem parcela: {len(contas_sem_parcela)}")
+    print("="*80 + "\n")
+
     total_criadas = 0
     total_baixas = 0
+    total_batches_parcelas = 0
+    total_batches_baixas = 0
     erros = []
-    for evento_id in contas_sem_parcela:
+    
+    batch_size = 100
+    parcelas_batch = []
+    baixas_batch = []
+    
+    for idx, evento_id in enumerate(tqdm(contas_sem_parcela, desc="Sincronizando parcelas faltantes"), 1):
         url = f"https://api-v2.contaazul.com/v1/financeiro/eventos-financeiros/parcelas/{evento_id}"
         try:
             resp = requests.get(url, headers=etl._get_headers(access_token), timeout=30)
+            
+            if resp.status_code == 429:
+                print(f"⚠️  Rate limit - aguardando 30s...")
+                time.sleep(30)
+                resp = requests.get(url, headers=etl._get_headers(access_token), timeout=30)
+            
+            if resp.status_code == 401:
+                print(f"❌ 401 UNAUTHORIZED - Token expirado! Tentando renovar...")
+                access_token = etl._get_token()
+                if not access_token:
+                    erro_msg = f"❌ Falha ao renovar token para evento {evento_id}"
+                    print(erro_msg)
+                    erros.append(erro_msg)
+                    continue
+                resp = requests.get(url, headers=etl._get_headers(access_token), timeout=30)
+            
             resp.raise_for_status()
-            parcela_data = resp.json()
+            parcelas_list = resp.json()
+            
+            if not isinstance(parcelas_list, list):
+                parcelas_list = [parcelas_list]
         except Exception as e:
-            erros.append(f"Erro ao buscar parcelas do evento {evento_id}: {e}")
+            erro_msg = f"Erro ao buscar parcelas do evento {evento_id}: {e}"
+            erros.append(erro_msg)
+            print(f"❌ {erro_msg}")
             continue
 
-        # Prepara dados da parcela
-        if isinstance(parcela_data, dict) and parcela_data.get('parcelas'):
-            parcelas_iter = parcela_data.get('parcelas') or []
-        elif isinstance(parcela_data, list):
-            parcelas_iter = parcela_data
-        else:
-            parcelas_iter = [parcela_data]
-
-        parcelas_registros = []
-        parcelas_baixas_registros = []
-        for parcela in parcelas_iter:
+        # Processa cada parcela
+        for parcela in parcelas_list:
             if not isinstance(parcela, dict):
                 continue
-            parcela_row = {
-                "parcela_id": parcela.get('id'),
-                "parcela_status": parcela.get('status'),
-                "condicao_pagamento": parcela.get('condicao_pagamento'),
-                "referencia": parcela.get('referencia'),
-                "agendado": parcela.get('agendado'),
-                "tipo_evento": parcela.get('tipo'),
-                "rateio": parcela.get('rateio'),
-                "conciliado": parcela.get('conciliado'),
-                "valor_pago": parcela.get('valor_pago'),
-                "perda": parcela.get('perda'),
-                "nao_pago": parcela.get('nao_pago'),
-                "data_vencimento": parcela.get('data_vencimento'),
-                "data_pagamento_previsto": parcela.get('data_pagamento_previsto'),
-                "descricao": parcela.get('descricao'),
-                "id_conta_financeira": parcela.get('id_conta_financeira'),
-                "metodo_pagamento": parcela.get('metodo_pagamento'),
-                "parent_evento_id": evento_id,
-            }
-            parcelas_registros.append(parcela_row)
-
-            baixas = parcela.get('baixas') if isinstance(parcela.get('baixas'), list) else []
+            
+            # Extrai informações de rateio
+            evento_data = parcela.get('evento', {})
+            rateio_list = evento_data.get('rateio', [])
+            
+            # Se houver múltiplos rateios, cria uma linha por rateio
+            if rateio_list:
+                for rateio in rateio_list:
+                    rateio_centro_custo_list = rateio.get('rateio_centro_custo', [])
+                    
+                    # Se houver múltiplos centros de custo, cria uma linha por centro
+                    if rateio_centro_custo_list:
+                        for centro_custo in rateio_centro_custo_list:
+                            parcela_row = {
+                                "parcela_id": parcela.get('id'),
+                                "parcela_status": parcela.get('status'),
+                                "condicao_pagamento": str(evento_data.get('condicao_pagamento', {})),
+                                "referencia": parcela.get('referencia'),
+                                "agendado": str(evento_data.get('agendado')).lower() if evento_data.get('agendado') is not None else None,
+                                "tipo_evento": evento_data.get('tipo'),
+                                "rateio": str(rateio_list),
+                                "conciliado": parcela.get('conciliado'),
+                                "valor_pago": parcela.get('valor_pago'),
+                                "perda": str(parcela.get('perda', {})),
+                                "nao_pago": parcela.get('nao_pago'),
+                                "data_vencimento": parcela.get('data_vencimento'),
+                                "data_pagamento_previsto": parcela.get('data_pagamento_previsto'),
+                                "descricao": parcela.get('descricao'),
+                                "id_conta_financeira": parcela.get('id_conta_financeira'),
+                                "metodo_pagamento": parcela.get('metodo_pagamento'),
+                                "parent_evento_id": evento_id,
+                                # Colunas de rateio
+                                "rateio_id_categoria": rateio.get('id_categoria'),
+                                "rateio_nome_categoria": rateio.get('nome_categoria'),
+                                "rateio_valor": float(rateio.get('valor', 0)) if rateio.get('valor') else None,
+                                "rateio_centro_custo_id": centro_custo.get('id_centro_custo'),
+                                "rateio_centro_custo_nome": centro_custo.get('nome_centro_custo'),
+                                "rateio_centro_custo_valor": float(centro_custo.get('valor', 0)) if centro_custo.get('valor') else None,
+                                "_loaded_at": datetime.now(etl.timezone).replace(microsecond=0).isoformat(),
+                                "parcela_loaded_at": datetime.now(etl.timezone).replace(microsecond=0).isoformat(),
+                            }
+                            parcelas_batch.append(parcela_row)
+                    else:
+                        # Sem centro de custo
+                        parcela_row = {
+                            "parcela_id": parcela.get('id'),
+                            "parcela_status": parcela.get('status'),
+                            "condicao_pagamento": str(evento_data.get('condicao_pagamento', {})),
+                            "referencia": parcela.get('referencia'),
+                            "agendado": str(evento_data.get('agendado')).lower() if evento_data.get('agendado') is not None else None,
+                            "tipo_evento": evento_data.get('tipo'),
+                            "rateio": str(rateio_list),
+                            "conciliado": parcela.get('conciliado'),
+                            "valor_pago": parcela.get('valor_pago'),
+                            "perda": str(parcela.get('perda', {})),
+                            "nao_pago": parcela.get('nao_pago'),
+                            "data_vencimento": parcela.get('data_vencimento'),
+                            "data_pagamento_previsto": parcela.get('data_pagamento_previsto'),
+                            "descricao": parcela.get('descricao'),
+                            "id_conta_financeira": parcela.get('id_conta_financeira'),
+                            "metodo_pagamento": parcela.get('metodo_pagamento'),
+                            "parent_evento_id": evento_id,
+                            # Colunas de rateio
+                            "rateio_id_categoria": rateio.get('id_categoria'),
+                            "rateio_nome_categoria": rateio.get('nome_categoria'),
+                            "rateio_valor": float(rateio.get('valor', 0)) if rateio.get('valor') else None,
+                            "rateio_centro_custo_id": None,
+                            "rateio_centro_custo_nome": None,
+                            "rateio_centro_custo_valor": None,
+                            "_loaded_at": datetime.now(etl.timezone).replace(microsecond=0).isoformat(),
+                            "parcela_loaded_at": datetime.now(etl.timezone).replace(microsecond=0).isoformat(),
+                        }
+                        parcelas_batch.append(parcela_row)
+            else:
+                # Sem rateio
+                parcela_row = {
+                    "parcela_id": parcela.get('id'),
+                    "parcela_status": parcela.get('status'),
+                    "condicao_pagamento": str(evento_data.get('condicao_pagamento', {})),
+                    "referencia": parcela.get('referencia'),
+                    "agendado": str(evento_data.get('agendado')).lower() if evento_data.get('agendado') is not None else None,
+                    "tipo_evento": evento_data.get('tipo'),
+                    "rateio": str(rateio_list),
+                    "conciliado": parcela.get('conciliado'),
+                    "valor_pago": parcela.get('valor_pago'),
+                    "perda": str(parcela.get('perda', {})),
+                    "nao_pago": parcela.get('nao_pago'),
+                    "data_vencimento": parcela.get('data_vencimento'),
+                    "data_pagamento_previsto": parcela.get('data_pagamento_previsto'),
+                    "descricao": parcela.get('descricao'),
+                    "id_conta_financeira": parcela.get('id_conta_financeira'),
+                    "metodo_pagamento": parcela.get('metodo_pagamento'),
+                    "parent_evento_id": evento_id,
+                    # Colunas de rateio
+                    "rateio_id_categoria": None,
+                    "rateio_nome_categoria": None,
+                    "rateio_valor": None,
+                    "rateio_centro_custo_id": None,
+                    "rateio_centro_custo_nome": None,
+                    "rateio_centro_custo_valor": None,
+                    "_loaded_at": datetime.now(etl.timezone).replace(microsecond=0).isoformat(),
+                    "parcela_loaded_at": datetime.now(etl.timezone).replace(microsecond=0).isoformat(),
+                }
+                parcelas_batch.append(parcela_row)
+            
+            # Processa baixas
+            baixas = parcela.get('baixas', [])
             for baixa in baixas:
                 if not isinstance(baixa, dict):
                     continue
+
                 vc = baixa.get('valor_composicao')
                 vc_obj = None
                 if isinstance(vc, dict):
@@ -2539,6 +3020,7 @@ def sincroniza_parcelas_faltantes(customer_id):
                         vc_obj = json.loads(vc)
                     except Exception:
                         vc_obj = None
+
                 baixa_multa = vc_obj.get('multa') if vc_obj and 'multa' in vc_obj else None
                 baixa_juros = vc_obj.get('juros') if vc_obj and 'juros' in vc_obj else None
                 baixa_valor_bruto = vc_obj.get('valor_bruto') if vc_obj and 'valor_bruto' in vc_obj else None
@@ -2572,23 +3054,69 @@ def sincroniza_parcelas_faltantes(customer_id):
                     "baixa_loaded_at": loaded_at_str,
                     "parcela_loaded_at": loaded_at_str,
                 }
-                parcelas_baixas_registros.append(baixa_row)
-
-        # Salva parcelas e baixas
-        if parcelas_registros:
-            ok_p = bq_storage.save_data(BQ_TABLES["parcelas"], parcelas_registros, "parent_evento_id")
+                baixas_batch.append(baixa_row)
+        
+        # Se atingiu batch_size de parcelas, salva
+        if len(parcelas_batch) >= batch_size:
+            print(f"📦 BATCH #{total_batches_parcelas + 1}: Salvando {len(parcelas_batch)} parcelas no BigQuery...")
+            ok_p = bq_storage.save_data(BQ_TABLES["parcelas"], parcelas_batch, "parcela_id")
             if ok_p:
-                total_criadas += len(parcelas_registros)
-        if parcelas_baixas_registros:
-            ok_b = bq_storage.save_data(BQ_TABLES["parcelas_baixas"], parcelas_baixas_registros, "parcela_id")
+                total_criadas += len(parcelas_batch)
+                total_batches_parcelas += 1
+                print(f"   ✅ {len(parcelas_batch)} parcelas salvas | Total acumulado: {total_criadas}\n")
+            parcelas_batch = []
+        
+        # Se atingiu batch_size de baixas, salva
+        if len(baixas_batch) >= batch_size:
+            print(f"📦 BATCH #{total_batches_baixas + 1}: Salvando {len(baixas_batch)} baixas no BigQuery...")
+            ok_b = bq_storage.save_data(BQ_TABLES["parcelas_baixas"], baixas_batch, "baixa_id")
             if ok_b:
-                total_baixas += len(parcelas_baixas_registros)
+                total_baixas += len(baixas_batch)
+                total_batches_baixas += 1
+                print(f"   ✅ {len(baixas_batch)} baixas salvas | Total acumulado: {total_baixas}\n")
+            baixas_batch = []
+        
+        time.sleep(0.3)  # Rate limit
+    
+    # Salva os registros restantes
+    print(f"\n📦 BATCH FINAL - Salvando registros restantes...")
+    if parcelas_batch:
+        print(f"📦 BATCH #{total_batches_parcelas + 1}: Salvando {len(parcelas_batch)} parcelas finais...")
+        ok_p = bq_storage.save_data(BQ_TABLES["parcelas"], parcelas_batch, "parcela_id")
+        if ok_p:
+            total_criadas += len(parcelas_batch)
+            total_batches_parcelas += 1
+            print(f"   ✅ {len(parcelas_batch)} parcelas finais salvas | Total acumulado: {total_criadas}\n")
+    
+    if baixas_batch:
+        print(f"📦 BATCH #{total_batches_baixas + 1}: Salvando {len(baixas_batch)} baixas finais...")
+        ok_b = bq_storage.save_data(BQ_TABLES["parcelas_baixas"], baixas_batch, "baixa_id")
+        if ok_b:
+            total_baixas += len(baixas_batch)
+            total_batches_baixas += 1
+            print(f"   ✅ {len(baixas_batch)} baixas finais salvas | Total acumulado: {total_baixas}\n")
 
+    print("="*80)
+    print(f"✅ SINCRONIZAÇÃO CONCLUÍDA!")
+    print(f"📊 Total de parcelas criadas: {total_criadas}")
+    print(f"📊 Total de baixas criadas: {total_baixas}")
+    print(f"📦 Total de batches (parcelas): {total_batches_parcelas}")
+    print(f"📦 Total de batches (baixas): {total_batches_baixas}")
+    if erros:
+        print(f"⚠️  Total de erros: {len(erros)}")
+        for erro in erros[:5]:  # Mostra os 5 primeiros erros
+            print(f"   - {erro}")
+    print("="*80 + "\n")
+    
     return jsonify({
+        "message": "Parcelas faltantes sincronizadas com sucesso",
+        "total_parcelas_criadas": total_criadas,
+        "total_baixas_criadas": total_baixas,
+        "total_batches_parcelas": total_batches_parcelas,
+        "total_batches_baixas": total_batches_baixas,
+        "batch_size": batch_size,
         "contas_sem_parcela": len(contas_sem_parcela),
-        "parcelas_criadas": total_criadas,
-        "baixas_criadas": total_baixas,
-        "erros": erros
+        "erros": erros if erros else []
     })
 
 
