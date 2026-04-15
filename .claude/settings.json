@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \"import py_compile; py_compile.compile\\('etl.py', doraise=True\\); print\\('OK'\\)\")",
+      "Bash(python3 -c \"import ast; ast.parse\\(open\\('etl.py'\\).read\\(\\)\\); print\\('Syntax OK'\\)\")",
+      "Bash(py -3 -c \"import ast; ast.parse\\(open\\('etl.py'\\).read\\(\\)\\); print\\('Syntax OK'\\)\")",
+      "Bash(py -3 -c \"import ast; ast.parse\\(open\\('etl.py', encoding='utf-8'\\).read\\(\\)\\); print\\('Syntax OK'\\)\")",
+      "Bash(py -3 -c ':*)"
+    ]
+  }
+}
